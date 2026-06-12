@@ -40,7 +40,6 @@ class A0(PVFunction):
         elif part == "finite":
             return 0
   
-    
     def _eval_massive(self, part = "full"):
         # Massive case
         m = sp.simplify( self.args[0] )
@@ -62,7 +61,7 @@ class A0(PVFunction):
 
         return sp.Piecewise( (self._eval_massless(part), m == 0 ), (self._eval_massive(part), m != 0 ) )
 
-    def numeric(self, part = "finite", kernel = "numpy"):
+    def numeric(self, kernel = "numpy"):
 
         return self._numeric_kernel
     
@@ -204,8 +203,7 @@ class B0(PVFunction):
         
         elif part == "finite":
             return 2 + ( (m1**2 - m2**2 + p2)/(2 * p2) ) * sp.log( m1**2/m2**2) - R - sp.log(m2**2 / mu**2)
-
-    
+ 
     def _eval(self, part = "full", **hints):
         """
         Apply kinematics to the B0 function
@@ -220,7 +218,7 @@ class B0(PVFunction):
                                 (self._eval_m1_eq_m2(part), p2 != 0 and m1 == m2),
                                 (self._eval_general(part), True )   )
     
-    def numeric(self, part = "finite"):
+    def numeric(self):
 
         return self._numeric_kernel
     
@@ -235,7 +233,7 @@ class B0(PVFunction):
         def f_zero(p2, m1, m2, mu_val, part):
             # p2 = 0, m1 = 0, m2 = 0
             if part == "pole":
-                return  0
+                return  1
         
             elif part == "finite":
                 return  0
@@ -645,8 +643,7 @@ class dB0_dp2(PVFunction):
         
         elif part == "finite":
             return  sp.sympify(  sp.Rational(1,2) * 1 / (m1**2 - m2**2)**3 ) * ( m1**4 - m2**4 - 2 * m1**2 * m2**2 * sp.log( m1**2 / m2**2 )  )
-        
-    
+          
     def _eval_m1_eq_m2(self, part = "full"):
         # Special case: m1 = m2, p2 != 0
         
@@ -671,8 +668,7 @@ class dB0_dp2(PVFunction):
                                 (self._eval_m1_eq_m2(part), p2 != 0 and m1 == m2),
                                 (self._eval_general(part), True )   )
     
-
-    def numeric(self, part="finite"):
+    def numeric(self):
 
         return self._numeric_kernel
 
@@ -895,7 +891,7 @@ class dB00_dp2(PVFunction):
                                 (self._eval_m1_eq_m2(part), p2 != 0 and m1 == m2),
                                 (self._eval_general(part), True )   )
     
-    def numeric(self, part="finite"):
+    def numeric(self):
 
         return self._numeric_kernel
 
@@ -923,7 +919,7 @@ class dB00_dp2(PVFunction):
         def f_zero(p2, m1, m2, mu_val, part):
             # p2 = 0, m1 = 0, m2 = 0
             if part == "pole":
-                return  0
+                return  - 1/12
         
             elif part == "finite":
                 return  0

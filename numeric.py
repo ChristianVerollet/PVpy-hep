@@ -1,4 +1,4 @@
-# pv/numeric.py
+# pvpy/numeric.py
 import numpy as np
 import sympy as sp
 from pvpy.base import PVFunction
@@ -28,7 +28,7 @@ def compile(expr, *, part="finite", mu_default = 1.0):
     # --- numeric wrappers (μ captured by closure!)
     def make_wrapper(cls):
         def wrapper(*kin_vals):
-            return cls._numeric_kernel(*kin_vals, mu_val=current_mu[0], part=part)
+            return cls._numeric_kernel(*kin_vals, mu_val = current_mu[0], part = part)
         return wrapper
 
     pv_numeric = {cls.__name__: make_wrapper(cls) for cls in PVFunction.__subclasses__()}
