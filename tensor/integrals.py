@@ -1,56 +1,95 @@
+#################################################
+################ Loopintegral ###################
+#################################################
 
 
 import sympy as sp
 from pvpy.tensor.objects import LoopMomentum
+from pvpy.functions.scalar import A0, B0, B00
+
+# Helper, to put elsewhere after to keep this class clean
+def propagator(p,m):
+
+    return p**2 - m**2
+
+def depends_on_loop(self, expr):
+
+    return any(expr.has(k) for k in self.loop_momenta )
+
+# Reducer functions
+
+def reduce_A0(I):
+
+    q, m = I.propagators[0]
+
+    if not I.depends_on_loop(q):
+        raise ValueError("Propagator does not depend on loop momentum.")
+
+    return I.numerator * A0(m)
+
+# Table for (N-point, rank)
+REDUCTION_TABLE = {(1,0): reduce_A0 }
+                            # (1,1): reduce_A1,
+                            # (2,0): reduce_B0,
+                            # (2,1): reduce_B1,
+                            # (2,2): reduce_B2  }
 
 
+    
 class LoopIntegral:
 
     def __init__(self, numerator, propagators, loop_momenta, dimension = 4):
 
         """
+        numerator: symbolic expression
         propagators: tuple of the form ( (momentum, mass) , ... )
+        loop_momenta: symbol of the the momenta that is integrated in the loop
 
         """
-        self.numerator = sp.sympify(numerator)
+        self.numerator = numerator
         self.propagators = propagators
         self.dimension = dimension
-
-        # ALWAYS a tuple
-        self.loop_momenta = tuple(loop_momenta)
-
-    # ----------------------
-    # Basic metadata
-    # ----------------------
-
-    @property
-    def nprop(self):
-        return len(self.propagators)
+        self.loop_momenta = loop_momenta 
+        self.N = len(propagators) # Number of points in the loop -> N points function
+        self.denominator = sp.prod(propagator(p[0], p[1])for p in self.propagators)
+        self.sympy_expr = self.numerator / self.denominator
 
     @property
     def rank(self):
-        return len(self.numerator.atoms(LoopMomentum))
+        # tensorial rank of the loop
+        if hasattr(self.numerator, "free_indices"):
+            return len(self.numerator.free_indices)
+        return 0
 
-    # ----------------------
-    # Display
-    # ----------------------
+    @property
+    def loop_rank(self):
 
-    def __repr__(self):
+        rank = 0
 
-        return f"LoopIntegral(rank={self.rank}" , f"nprop={self.nprop})"
+        for factor in sp.Mul.make_args(self.numerator):
+
+            if isinstance(factor, LoopMomentum):
+                rank += 1
+
+        return rank
     
-    def _repr_latex_(self):
+    @property
+    def indices(self):
+        if hasattr(self.numerator, "free_indices"):
+            return self.numerator.free_indices
+        return {}
+    
+    @property
+    def topology(self):
+        return (self.N, self.rank)
+    
+    def tensorial_reduction(self):
 
-        denom_terms = []
+        key = (self.N, self.rank)
 
-        for mom, mass in self.propagators:
+        if key not in REDUCTION_TABLE:
+            raise NotImplementedError(
+                f"Reduction {key} not implemented."
+            )
 
-            denom_terms.append( (mom**2 - mass**2)) # sympy object
-
-        num = sp.latex(self.numerator)
-
-        denom = " ".join(denom_terms)
-
-        measure = " ".join([rf"\frac{{d^{self.dimension} {sp.latex(k)}}}{{(2\pi)^{self.dimension}}}" for k in self.loop_momenta])
-
-        return rf"""$$\int {measure}\; \frac{{{num}}}{{{denom}}}$$ """
+        return REDUCTION_TABLE[key](self)
