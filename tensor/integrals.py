@@ -24,7 +24,7 @@ def reduce_A0(I):
 
     if not I.depends_on_loop(q):
         raise ValueError("Propagator does not depend on loop momentum.")
-
+    
     return I.numerator * A0(m)
 
 # Table for (N-point, rank)
