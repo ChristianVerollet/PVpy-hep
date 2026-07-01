@@ -5,7 +5,7 @@
 import sympy as sp
 import numpy as np
 from ..base import PVFunction
-from ..symbols import epsilon, mu
+from ..symbols import epsilon_bar, mu
 
 atol = 1e-8 # Used for the tolerance when p² ~ 0 and for A0 where 1 mass argument is involved
 scale_tol = 1e-4 # Scale tolerance for all other functions to use the expanded function to avoid brutal shift in the values
@@ -45,7 +45,7 @@ class A0(PVFunction):
         m = sp.simplify( self.args[0] )
 
         if part == "full":
-            return sp.sympify( m**2*( 1 + 1/epsilon  - sp.log(m**2 / mu**2) ) )
+            return sp.sympify( m**2*( 1 + 1/epsilon_bar  - sp.log(m**2 / mu**2) ) )
         
         elif part == "pole":
             return sp.sympify( m**2 )
@@ -132,7 +132,7 @@ class B0(PVFunction):
         p2, m1, m2 = map(sp.simplify, self.args) 
         
         if part == "full":
-            return 1 + 1/epsilon - sp.log(m1**2 / mu**2)
+            return 1 + 1/epsilon_bar - sp.log(m1**2 / mu**2)
         
         elif part == "pole":
             return 1
@@ -145,7 +145,7 @@ class B0(PVFunction):
         p2, m1, m2 = map(sp.simplify, self.args) 
         
         if part == "full":
-            return 1 + 1/epsilon - sp.log(m2**2 / mu**2)
+            return 1 + 1/epsilon_bar - sp.log(m2**2 / mu**2)
         
         elif part == "pole":
             return 1
@@ -158,7 +158,7 @@ class B0(PVFunction):
         p2, m1, m2 = map(sp.simplify, self.args) # rename for clarity
         
         if part == "full":
-            return 1/epsilon - sp.log(m2**2 / mu**2)
+            return 1/epsilon_bar - sp.log(m2**2 / mu**2)
         
         elif part == "pole":
             return 1
@@ -180,7 +180,7 @@ class B0(PVFunction):
         R = - (Lambda/p2) * sp.log( (2 * m1**2 - p2 + Lambda)/(2 * m1 ** 2) )
 
         if part == "full":
-            return 1/epsilon - sp.log(m2**2 / mu**2) + 2 - R
+            return 1/epsilon_bar - sp.log(m2**2 / mu**2) + 2 - R
         
         elif part == "pole":
             return 1
@@ -196,7 +196,7 @@ class B0(PVFunction):
         R = - (Lambda/p2) * sp.log( (m1**2 + m2**2 - p2 + Lambda)/(2 * m1 * m2) )
 
         if part == "full":
-            return 1/epsilon - sp.log(m2**2 / mu**2) + 2 + ( (m1**2 - m2**2 + p2)/(2 * p2) ) * sp.log( m1**2/m2**2) - R
+            return 1/epsilon_bar - sp.log(m2**2 / mu**2) + 2 + ( (m1**2 - m2**2 + p2)/(2 * p2) ) * sp.log( m1**2/m2**2) - R
         
         elif part == "pole":
             return 1 
@@ -383,7 +383,7 @@ class B00(PVFunction):
         p2, m1, m2 = map(sp.simplify, self.args) 
         
         if part == "full":
-            return sp.sympify( sp.Rational(1,4) * m2**2 * ( sp.Rational(3,2) + 1/epsilon - sp.log( m2**2 / mu**2 ) ) )
+            return sp.sympify( sp.Rational(1,4) * m2**2 * ( sp.Rational(3,2) + 1/epsilon_bar - sp.log( m2**2 / mu**2 ) ) )
         
         elif part == "pole":
             return sp.sympify( sp.Rational(1,4) * m2**2  )
@@ -396,7 +396,7 @@ class B00(PVFunction):
         p2, m1, m2 = map(sp.simplify, self.args) 
         
         if part == "full":
-            return sp.sympify( sp.Rational(1,4) * m1**2 * ( sp.Rational(3,2) + 1/epsilon - sp.log( m1**2 / mu**2 ) ) )
+            return sp.sympify( sp.Rational(1,4) * m1**2 * ( sp.Rational(3,2) + 1/epsilon_bar - sp.log( m1**2 / mu**2 ) ) )
         
         elif part == "pole":
             return sp.sympify( sp.Rational(1,4) * m1**2  )
@@ -409,7 +409,7 @@ class B00(PVFunction):
         p2, m1, m2 = map(sp.simplify, self.args) # rename for clarity
         
         if part == "full":
-            return sp.sympify( sp.Rational(1,2) * m1**2 * (1 + 1/epsilon - sp.log( m2**2 / mu**2 ) ) )
+            return sp.sympify( sp.Rational(1,2) * m1**2 * (1 + 1/epsilon_bar - sp.log( m2**2 / mu**2 ) ) )
         
         elif part == "pole":
             return sp.sympify( sp.Rational(1,2) * m1**2  )
@@ -422,7 +422,7 @@ class B00(PVFunction):
         p2, m1, m2 = map(sp.simplify, self.args) # rename for clarity
         
         if part == "full":
-            return sp.sympify(  sp.Rational(1,4) * ( m1**2 + m2**2 ) * ( sp.Rational(3,2) + 1/epsilon - sp.log( m2**2 / mu**2 ) )
+            return sp.sympify(  sp.Rational(1,4) * ( m1**2 + m2**2 ) * ( sp.Rational(3,2) + 1/epsilon_bar - sp.log( m2**2 / mu**2 ) )
                             +  ( m1**4 / (4 * (m1**2 - m2**2))) * sp.log( m1**2 / m2**2 ) , rational=True )
         elif part == "pole":
             return  sp.sympify(  sp.Rational(1,4) * ( m1**2 + m2**2 )  , rational=True )
@@ -817,7 +817,7 @@ class dB00_dp2(PVFunction):
         p2, m1, m2 = map(sp.simplify, self.args) 
         
         if part == "full":
-            return - sp.Rational(1,12) * ( 1/epsilon - sp.log( m2**2 / mu**2 ) ) - sp.Rational(5,72)
+            return - sp.Rational(1,12) * ( 1/epsilon_bar - sp.log( m2**2 / mu**2 ) ) - sp.Rational(5,72)
         
         elif part == "pole":
             return  - sp.Rational(1,12) 
@@ -830,7 +830,7 @@ class dB00_dp2(PVFunction):
         p2, m1, m2 = map(sp.simplify, self.args) 
         
         if part == "full":
-            return - sp.Rational(1,12) * ( 1/epsilon - sp.log( m1**2 / mu**2 ) ) - sp.Rational(5,72)
+            return - sp.Rational(1,12) * ( 1/epsilon_bar - sp.log( m1**2 / mu**2 ) ) - sp.Rational(5,72)
         
         elif part == "pole":
             return  - sp.Rational(1,12) 
@@ -843,7 +843,7 @@ class dB00_dp2(PVFunction):
         p2, m1, m2 = map(sp.simplify, self.args) # rename for clarity
         
         if part == "full":
-            return - sp.Rational(1,12) * ( 1/epsilon - sp.log( m2**2 / mu**2 ) ) 
+            return - sp.Rational(1,12) * ( 1/epsilon_bar - sp.log( m2**2 / mu**2 ) ) 
         
         elif part == "pole":
             return  - sp.Rational(1,12) 
@@ -855,7 +855,7 @@ class dB00_dp2(PVFunction):
         p2, m1, m2 = map(sp.simplify, self.args) # rename for clarity
 
         if part == "full":
-            return ( - sp.Rational(1,12) * ( 1/epsilon - sp.log( m1*m2 / mu**2 ) ) 
+            return ( - sp.Rational(1,12) * ( 1/epsilon_bar - sp.log( m1*m2 / mu**2 ) ) 
                     - sp.Rational(1,72) * (  - 3 * (m1**6 - 3*m1**2*m2**4 - 3*m1**4*m2**2 + m2**6)/(m1**2 - m2**2)**3 * sp.log(m1**2 / m2**2) 
                                           + (5*m1**4 - 22*m1**2*m2**2 + 5*m2**4)/(m1**2 - m2**2)**2 ) )
     
