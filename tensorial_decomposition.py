@@ -16,7 +16,9 @@ coefficients" step you plug in via PV_REGISTRY (or leave symbolic until
 you implement it).
 """
 
+import functools
 import itertools
+import operator
 from collections import defaultdict
 from sympy.tensor.tensor import TensorHead
 from sympy.physics.hep.gamma_matrices import gamma_trace
@@ -25,91 +27,12 @@ from typing import List, Tuple, Dict, Optional, Sequence
 
 import sympy as sp
 
-
-# ---------------------------------------------------------------------------
-# 1. Lorentz-tensor building blocks (pure sympy Function objects)
-# ---------------------------------------------------------------------------
-
-class g(sp.Function):
-    """Metric tensor g^{mu nu}, symmetric under index exchange."""
-    nargs = 2
-
-    @classmethod
-    def eval(cls, mu, nu):
-        if sp.sympify(mu).sort_key() > sp.sympify(nu).sort_key():
-            return cls(nu, mu)
-
-    def _sympystr(self, printer):
-        a, b = self.args
-        return f"g^{{{a}{b}}}"
-
-    def _latex(self, printer):
-        a, b = self.args
-        return r"g^{%s%s}" % (printer._print(a), printer._print(b))
-
-
-class Mom(sp.Function):
-    """Component of a momentum: Mom(p, mu) represents p^mu. Linear in p."""
-    nargs = 2
-
-    @classmethod
-    def eval(cls, p, mu):
-        p = sp.expand(p)
-        if p.is_Add:
-            return sp.Add(*[cls(term, mu) for term in p.args])
-        coeff, rest = p.as_coeff_Mul()
-        if coeff != 1 and rest != 0:
-            return coeff * cls(rest, mu)
-        if p == 0:
-            return sp.Integer(0)
-
-    def _sympystr(self, printer):
-        p, mu = self.args
-        p_str = printer._print(p)
-        if not p.is_Atom:
-            p_str = f"({p_str})"
-        return f"{p_str}^{{{mu}}}"
-
-    def _latex(self, printer):
-        p, mu = self.args
-        p_str = printer._print(p)
-        if not p.is_Atom:
-            p_str = r"\left(%s\right)" % p_str
-        return r"%s^{%s}" % (p_str, printer._print(mu))
-
-
-def simplify_external_dots(expr: sp.Expr, k: sp.Symbol) -> sp.Expr:
-    """Auto-rewrite Dot(a,b) for a,b != k via a.a -> a^2, a.b -> ((a+b)^2-a^2-b^2)/2. Leaves Dot(k,...) untouched."""
-    subs = {}
-    for d in expr.atoms(Dot):
-        a, b = d.args
-        if a == k or b == k:
-            continue
-        subs[d] = a**2 if a == b else sp.expand((a + b) ** 2 - a ** 2 - b ** 2) / 2
-    return expr.subs(subs) if subs else expr
+from .algebra import g, Mom, Dot, Eps, simplify_external_dots
 
 
 # ---------------------------------------------------------------------------
 # 2. LoopIntegral container
 # ---------------------------------------------------------------------------
-
-class Dot(sp.Function):
-    """Scalar dot product placeholder: Dot(a, b) represents a.b (symmetric)."""
-    nargs = 2
-
-    @classmethod
-    def eval(cls, a, b):
-        if sp.sympify(a).sort_key() > sp.sympify(b).sort_key():
-            return cls(b, a)
-
-    def _sympystr(self, printer):
-        a, b = self.args
-        return f"({printer._print(a)}.{printer._print(b)})"
-
-    def _latex(self, printer):
-        a, b = self.args
-        return r"%s\!\cdot\!%s" % (printer._print(a), printer._print(b))
-
 
 @dataclass
 class Propagator:
@@ -399,52 +322,6 @@ def _validate_numerator(numerator: sp.Expr, k: sp.Symbol) -> None:
         )
 
 
-class Eps(sp.Function):
-    """
-    Totally antisymmetric Levi-Civita object, Eps(s1,s2,s3,s4). Each slot is
-    EITHER a free Lorentz index (a bare Symbol -> open slot) OR a momentum
-    expression (-> that slot is understood as contracted with that momentum,
-    exactly like Mom packs a momentum+index into one object). Linear in any
-    momentum slot; antisymmetric under exchange of any two slots; vanishes
-    if two slots coincide.
-    """
-    nargs = 4
-
-    @classmethod
-    def eval(cls, *args):
-        args = list(args)
-        for i, a in enumerate(args):
-            a = sp.sympify(a)
-            a_exp = sp.expand(a)
-            if a_exp.is_Add:
-                return sp.Add(*[cls(*(args[:i] + [term] + args[i + 1:])) for term in a_exp.args])
-            coeff, rest = a_exp.as_coeff_Mul()
-            if coeff != 1 and rest != 0:
-                return coeff * cls(*(args[:i] + [rest] + args[i + 1:]))
-        for i in range(4):
-            for j in range(i + 1, 4):
-                if args[i] == args[j]:
-                    return sp.Integer(0)
-        keys = [sp.sympify(a).sort_key() for a in args]
-        order = sorted(range(4), key=lambda i: keys[i])
-        if order == [0, 1, 2, 3]:
-            return None  # already canonical
-        sign = sp.combinatorics.Permutation(order).signature()
-        return sign * cls(*[args[i] for i in order])
-
-    def _sympystr(self, printer):
-        def fmt(a):
-            s = printer._print(a)
-            return f"({s})" if not sp.sympify(a).is_Atom else s
-        return "eps^{" + ",".join(fmt(a) for a in self.args) + "}"
-
-    def _latex(self, printer):
-        def fmt(a):
-            s = printer._print(a)
-            return r"\left(%s\right)" % s if not sp.sympify(a).is_Atom else s
-        return r"\epsilon^{%s}" % ",".join(fmt(a) for a in self.args)
-
-
 # ---------------------------------------------------------------------------
 # 5d. Gamma traces (no gamma-5)
 # ---------------------------------------------------------------------------
@@ -462,24 +339,32 @@ def from_gamma_trace(trace_expr, momentum_map: Dict[object, sp.Expr]) -> sp.Expr
     trace_expr = trace_expr.expand()
     out = 0
     for term in trace_expr.args if isinstance(trace_expr, (sp.Add, TensAdd)) else [trace_expr]:
-        coeff = getattr(term, "coeff", term)
-        components = getattr(term, "components", [])
-        idxs = list(getattr(term, "get_indices", lambda: [])())
+        if not hasattr(term, "components"):
+            # Plain scalar (e.g. a trace term that vanished identically to 0).
+            # NB: can't use `getattr(term, "coeff", term)` here -- every plain
+            # sympy Expr (Integer, Symbol, ...) already has an unrelated
+            # `.coeff` *method* (Expr.coeff), so the getattr default never
+            # triggers and silently returns a bound method instead of `term`.
+            out += term
+            continue
+        coeff = term.coeff
+        components = term.components
+        idxs = list(term.get_indices())
 
-        occurrences = []  # (kind, momentum_symbol_or_None, index)
+        occurrences = []  # (kind, momentum_symbol_or_None, index, comp_id)
         pos = 0
-        for comp in components:
+        for comp_id, comp in enumerate(components):
             n = len(comp.index_types)
             comp_idxs = idxs[pos:pos + n]
             pos += n
             if comp.name == "metric":
-                occurrences.append(("metric", None, comp_idxs[0]))
-                occurrences.append(("metric", None, comp_idxs[1]))
+                occurrences.append(("metric", None, comp_idxs[0], comp_id))
+                occurrences.append(("metric", None, comp_idxs[1], comp_id))
             else:
                 mom_symbol = momentum_map.get(comp)
                 if mom_symbol is None:
                     raise KeyError(f"no momentum_map entry for tensor head {comp}")
-                occurrences.append(("mom", mom_symbol, comp_idxs[0]))
+                occurrences.append(("mom", mom_symbol, comp_idxs[0], comp_id))
 
         used = [False] * len(occurrences)
         pairs, free = [], []
@@ -496,19 +381,30 @@ def from_gamma_trace(trace_expr, momentum_map: Dict[object, sp.Expr]) -> sp.Expr
                 free.append(occurrences[i])
 
         term_val = sp.sympify(coeff)
-        for (k1, m1, _idx1), (k2, m2, _idx2) in pairs:
+        for (k1, m1, _idx1, _c1), (k2, m2, _idx2, _c2) in pairs:
             if k1 == "metric" and k2 == "metric":
                 term_val *= sp.Symbol("d")
             else:
                 term_val *= Dot(m1, m2)
 
-        free_metric_idxs = [sp.Symbol(idx.name) for kind, _, idx in free if kind == "metric"]
-        free_mom = [(mom, sp.Symbol(idx.name)) for kind, mom, idx in free if kind == "mom"]
-        if len(free_metric_idxs) == 2:
-            term_val *= g(*free_metric_idxs)
-        elif len(free_metric_idxs) == 1:
-            raise NotImplementedError("metric with one free / one contracted-to-momentum index "
-                                       "not yet supported by this bridge")
+        # Free metric indices must be grouped by the tensor component (i.e. the
+        # individual metric(.,.) factor) they came from -- a term can contain
+        # several independent, fully-free metric factors (e.g. the 4-gamma
+        # trace tr[g^mu g^nu g^rho g^sigma] produces g(mu,nu)*g(rho,sigma)-like
+        # terms), and lumping all their indices into one flat list would mix
+        # indices from different factors together.
+        free_metric_by_comp: Dict[int, List[sp.Symbol]] = {}
+        for kind, _, idx, comp_id in free:
+            if kind == "metric":
+                free_metric_by_comp.setdefault(comp_id, []).append(sp.Symbol(idx.name))
+        free_mom = [(mom, sp.Symbol(idx.name)) for kind, mom, idx, _ in free if kind == "mom"]
+
+        for idx_list in free_metric_by_comp.values():
+            if len(idx_list) == 2:
+                term_val *= g(*idx_list)
+            elif len(idx_list) == 1:
+                raise NotImplementedError("metric with one free / one contracted-to-momentum index "
+                                           "not yet supported by this bridge")
         for mom, idx in free_mom:
             term_val *= Mom(mom, idx)
 
@@ -528,28 +424,75 @@ GAMMA5_TRACE_COEFF = -4 * sp.I
 G5 = TensorHead("G5", [])  # zero-index marker: insert G5() at gamma5's position in the product
 
 
+def _cancel_g5_pairs(term):
+    """
+    Reduce a TensMul's G5() count to 0 or 1 using G5**2 = 1.
+
+    Repeatedly takes the first two G5 factors (in physical left-to-right
+    order, via term.args -- see CLAUDE.md bug #6, zero-index TensorHeads
+    keep their position under multiplication) and slides the second one
+    left to meet the first: each GammaMatrix it passes contributes a (-1)
+    from the anticommutator {gamma5, gamma^mu} = 0, then the adjacent
+    G5*G5 = 1 pair is simply dropped. Momentum-head factors (the slash()
+    partner of a GammaMatrix) are ordinary vectors, not gamma matrices, so
+    they contribute no sign and are left in place.
+    """
+    factors = list(getattr(term, "args", [term]))
+    g5_idx = [i for i, f in enumerate(factors)
+              if getattr(getattr(f, "component", None), "name", None) == "G5"]
+    if len(g5_idx) < 2:
+        return term
+
+    sign = 1
+    while len(g5_idx) >= 2:
+        i, j = g5_idx[0], g5_idx[1]
+        n_between = sum(
+            1 for f in factors[i + 1:j] if f.component.name == "GammaMatrix"
+        )
+        sign *= (-1) ** n_between
+        del factors[j]
+        del factors[i]
+        g5_idx = [i for i, f in enumerate(factors)
+                  if getattr(getattr(f, "component", None), "name", None) == "G5"]
+
+    reduced = functools.reduce(operator.mul, factors) if factors else sp.Integer(1)
+    return sign * reduced
+
+
 def gamma5_trace(expr, momentum_map: Dict[object, sp.Expr]) -> sp.Expr:
     """
-    Trace of an expression containing exactly one G5() marker per term
-    (terms with zero or an even number of G5 insertions should instead be
-    passed through ordinary gamma_trace, since G5**2 = 1). Returns a sympy
-    expression in g()/Mom()/Dot()/Eps() language directly (bypasses
-    gamma_trace entirely, since it doesn't know about G5).
+    Trace of an expression containing any number of G5() markers per term.
+    Pairs of G5's are pre-cancelled via G5**2 = 1 (see _cancel_g5_pairs
+    below), which anticommutes the second G5 of each pair leftward past
+    every intervening GammaMatrix -- physically this is what lets a chiral
+    (V-A)-type coupling squared, e.g.
+    `(g_V - g_A*Gamma5())*Gamma(mu)*...*(g_V + g_A*Gamma5())*Gamma(nu)`,
+    reduce its g_A**2 term (two G5's, not adjacent) back to an ordinary
+    trace. After cancellation, at most one G5 remains per term. Returns a
+    sympy expression in g()/Mom()/Dot()/Eps() language directly (bypasses
+    gamma_trace entirely for the single-G5 case, since it doesn't know
+    about G5).
     """
     from sympy.tensor.tensor import TensAdd
     expr = expr.expand()
     out = 0
     for term in expr.args if isinstance(expr, (sp.Add, TensAdd)) else [expr]:
-        coeff = sp.sympify(getattr(term, "coeff", term))
-        components = list(getattr(term, "components", []))
-        idxs = list(getattr(term, "get_indices", lambda: [])())
+        term = _cancel_g5_pairs(term)
+
+        if not hasattr(term, "components"):
+            # All G5's cancelled with nothing left (e.g. a bare Gamma5()*Gamma5()
+            # term) -- what remains is Tr[term * 1] = term * d.
+            out += term * sp.Symbol("d")
+            continue
+
+        coeff = sp.sympify(term.coeff)
+        components = list(term.components)
+        idxs = list(term.get_indices())
 
         n_g5 = sum(1 for c in components if c.name == "G5")
         if n_g5 == 0:
             out += from_gamma_trace(gamma_trace(term), momentum_map)
             continue
-        if n_g5 != 1:
-            raise NotImplementedError("more than one G5 marker in a single term not supported")
 
         g5_pos = next(i for i, c in enumerate(components) if c.name == "G5")
         n_gammas_before = sum(1 for c in components[:g5_pos] if c.name == "GammaMatrix")
@@ -616,6 +559,17 @@ def gamma5_trace(expr, momentum_map: Dict[object, sp.Expr]) -> sp.Expr:
 # ---------------------------------------------------------------------------
 
 def ReduceGeneralNumerator(loop_integral: LoopIntegral, numerator: sp.Expr) -> sp.Expr:
+    """
+    Reduce a numerator expression to PV functions.
+
+    Handles:
+    - Spectator factors (g, Mom(p,...), couplings, Eps with no k-slot)
+    - Scalar k-dependence: Dot(k,k), Dot(k,V)
+    - Open k-indices: Mom(k, mu)
+    - Eps(k, s2, s3, s4): k in an Eps slot is treated as a rank-1 open index
+      (via a dummy Lorentz index), reduced by TensorialDecomposition, then
+      contracted back into the Eps slot with contract_with_eps.
+    """
     k = loop_integral.k
     numerator = sp.expand(simplify_external_dots(sp.expand(numerator), k))
 
@@ -624,32 +578,53 @@ def ReduceGeneralNumerator(loop_integral: LoopIntegral, numerator: sp.Expr) -> s
         factors = term.as_ordered_factors()
         open_k = [f for f in factors if isinstance(f, Mom) and f.args[0] == k]
         scalar_k = [f for f in factors if isinstance(f, Dot) and k in f.args]
-        spectator = [f for f in factors if f not in open_k and f not in scalar_k]
-        spectator_part = sp.Mul(*spectator) if spectator else sp.Integer(1)
+        eps_factors = [f for f in factors if isinstance(f, Eps)]
+        spectator = [f for f in factors
+                     if f not in open_k and f not in scalar_k and f not in eps_factors]
 
-        if not open_k:
-            # pure Method A: same as ReduceLoopIntegral's per-term logic
+        # For each Eps with k in a slot, introduce a dummy Lorentz index so the
+        # k-dependence feeds into TensorialDecomposition as an extra open index.
+        # Eps(k, s2, s3, s4) -> dummy d, Eps(d, s2, s3, s4) + virtual Mom(k, d).
+        # contract_with_eps later substitutes the reduced p_i back into slot d.
+        eps_dummies = []    # (dummy_idx, Eps_with_dummy_replacing_k)
+        eps_spectators = [] # Eps factors with no k-slot (pure spectators)
+        for eps_f in eps_factors:
+            k_slot = next((i for i, a in enumerate(eps_f.args) if a == k), None)
+            if k_slot is None:
+                eps_spectators.append(eps_f)
+            else:
+                d = sp.Dummy("eps_mu")
+                new_args = list(eps_f.args)
+                new_args[k_slot] = d
+                eps_dummies.append((d, Eps(*new_args)))
+
+        spectator_part = (sp.Mul(*(spectator + eps_spectators))
+                          if (spectator + eps_spectators) else sp.Integer(1))
+
+        # Effective open k-indices: explicit Mom(k, mu) + one virtual per Eps k-slot
+        effective_open_k = open_k + [Mom(k, d) for d, _ in eps_dummies]
+
+        if not effective_open_k:
             k_part = sp.Mul(*scalar_k) if scalar_k else sp.Integer(1)
             _validate_numerator(k_part, k)
             result += spectator_part * reduce_scalar_k_dependence(k_part, loop_integral)
             continue
 
-        # Mixed term: R_open free k-indices, plus possibly Dot(k,k)/Dot(k,V) factors
-        # that pin down EXTRA (dummy) k-indices. Build the full open-rank tensor at
-        # rank = R_open + 2*deg(Dot(k,k)) + sum(deg(Dot(k,V_j))) via TensorialDecomposition,
-        # then contract the dummy slots away with the existing contraction helpers.
-        free_idx_syms = [f.args[1] for f in open_k]
+        # Mixed term: build open-rank tensor, contract extra dummy slots back down.
+        free_idx_syms = [f.args[1] for f in effective_open_k]
         dummy_pairs, dummy_single = [], []
         for f in scalar_k:
             a, b = f.args
             partner = b if a == k else a
-            if partner == k:  # Dot(k,k)
+            if partner == k:
                 d1, d2 = sp.Dummy(), sp.Dummy()
                 dummy_pairs.append((d1, d2))
             else:
                 dummy_single.append((sp.Dummy(), partner))
 
-        all_indices = free_idx_syms + [d for pair in dummy_pairs for d in pair] + [d for d, _ in dummy_single]
+        all_indices = (free_idx_syms
+                       + [d for pair in dummy_pairs for d in pair]
+                       + [d for d, _ in dummy_single])
         rank = len(all_indices)
         tensor_loop = LoopIntegral(k=k, propagators=loop_integral.propagators, rank=rank)
         tensor_result = TensorialDecomposition(tensor_loop, indices=all_indices)
@@ -658,37 +633,10 @@ def ReduceGeneralNumerator(loop_integral: LoopIntegral, numerator: sp.Expr) -> s
             tensor_result = contract_with_metric(tensor_result, d1, d2)
         for d, V in dummy_single:
             tensor_result = contract_with_momentum(tensor_result, d, V)
+        for eps_d, eps_with_d in eps_dummies:
+            tensor_result = contract_with_eps(tensor_result, eps_d, eps_with_d)
 
         result += spectator_part * tensor_result
-    return sp.expand(result)
-    """
-    General entry point: numerator is a sympy expression built from
-    spectator tensors (g(mu,nu), Mom(p,mu), coupling factors) times scalar
-    k-dependence written as Dot(k,k) / Dot(k, p). Open Mom(k,mu) factors are
-    NOT supported here -- use TensorialDecomposition for genuine open-k rank.
-    """
-    k = loop_integral.k
-    numerator = sp.expand(numerator)
-    numerator = simplify_external_dots(numerator, k)
-    numerator = sp.expand(numerator)
-    _validate_numerator(numerator, k)
-    result = 0
-    for term in numerator.as_ordered_terms():
-        factors = term.as_ordered_factors()
-        k_factors = [f for f in factors if isinstance(f, Dot) and k in f.args]
-        open_k_factors = [f for f in factors if isinstance(f, Mom) and f.args[0] == k]
-        if open_k_factors:
-            raise NotImplementedError(
-                f"term '{term}' has an open k-index (Mom(k,...)) mixed with other "
-                f"factors -- ReduceLoopIntegral only handles fully-contracted scalar "
-                f"k-dependence (Dot(k,k), Dot(k,p)). Genuine open k^mu indices need "
-                f"TensorialDecomposition; combining both in one numerator isn't wired "
-                f"up yet."
-            )
-        spectator_factors = [f for f in factors if f not in k_factors]
-        k_part = sp.Mul(*k_factors) if k_factors else sp.Integer(1)
-        spectator_part = sp.Mul(*spectator_factors) if spectator_factors else sp.Integer(1)
-        result += spectator_part * reduce_scalar_k_dependence(k_part, loop_integral)
     return sp.expand(result)
 
 
@@ -744,6 +692,41 @@ def contract_with_metric(expr: sp.Expr, mu: sp.Symbol, nu: sp.Symbol,
             out += sp.Mul(*rest) * sp.expand(f_mu.args[0] * f_nu.args[0])
         else:
             raise ValueError(f"unhandled term when contracting mu,nu: {term}")
+    return sp.expand(out)
+
+
+def contract_with_eps(expr: sp.Expr, dummy_idx, eps_obj: "Eps") -> sp.Expr:
+    """
+    Replace a free dummy index in an Eps slot by the momentum/index carried by the
+    corresponding Mom(p, dummy_idx) or g(dummy_idx, other) factor in each term of expr.
+
+    Used after TensorialDecomposition to close the loop between an Eps k-slot and the
+    rank-1 (or higher) tensor reduction:
+        Eps(k, s2, s3, s4) → introduce dummy d, reduce → Mom(p_i, d) × PV_i
+        → contract_with_eps → PV_i × Eps(p_i, s2, s3, s4)
+    """
+    expr = sp.expand(expr)
+    eps_args = list(eps_obj.args)
+    slot = eps_args.index(dummy_idx)
+
+    out = 0
+    for term in expr.as_ordered_terms():
+        replacement, rest = None, []
+        for f in term.as_ordered_factors():
+            if isinstance(f, Mom) and f.args[1] == dummy_idx:
+                replacement = f.args[0]          # momentum p
+            elif isinstance(f, g) and dummy_idx in f.args:
+                replacement = f.args[0] if f.args[1] == dummy_idx else f.args[1]
+            else:
+                rest.append(f)
+        if replacement is None:
+            raise ValueError(
+                f"Eps dummy index {dummy_idx} not found in term '{term}'. "
+                "The rank passed to TensorialDecomposition was probably wrong."
+            )
+        new_eps_args = eps_args[:]
+        new_eps_args[slot] = replacement
+        out += sp.Mul(*rest) * Eps(*new_eps_args)
     return sp.expand(out)
 
 
@@ -806,3 +789,17 @@ if __name__ == "__main__":
         (G(gb) * k_head(-gb) + G(gb) * p_head(-gb)) * G(nu_t)
     g5_result = gamma5_trace(g5_expr, {k_head: sp.Symbol("k"), p_head: p1})
     print("Tr[g5 slash(k) g^mu slash(k+p) g^nu] :", g5_result)
+
+    # --- ReduceGeneralNumerator with Eps from a chiral trace ---
+    # Self-energy: Tr[g5 k/ g^mu (k/+p/) g^nu] / (k^2*(k-p)^2) = 4i*eps^{k,mu,nu,p}
+    # After integration, k^alpha -> p1^alpha * B1, so Eps(p1,mu,nu,p1) = 0.
+    k_sym = sp.Symbol("k")
+    bubble_li = LoopIntegral(
+        k=k_sym,
+        propagators=[Propagator(shift=sp.Integer(0), mass=m0),
+                     Propagator(shift=p1, mass=m1)],
+        rank=0,
+    )
+    g5_reduced = ReduceGeneralNumerator(bubble_li, g5_result)
+    print("ReduceGeneralNumerator(Eps chiral self-energy) :", g5_reduced,
+          " [expect 0 by antisymmetry]")

@@ -26,8 +26,25 @@ class PVFunction(sp.Expr):
                 s |= a.free_symbols
         return s
     
+    # ----- Reduction to simpler PV functions ----- #
+
+    def reduce(self):
+        """
+        Return a sympy expression for this function in terms of simpler PV functions,
+        or None if this is a primitive that cannot be further reduced.
+
+        Primitive functions (A0, B0, B00, ...) return None.
+        Derived functions (A00, B1, B11, ...) override this to return their formula.
+
+        Always call set_kinematics() before reduce_pv() so that terms whose
+        coefficient vanishes under the kinematic conditions disappear before
+        the reduction formulas (which can have apparent denominator singularities
+        such as 1/p² in B1) are applied.
+        """
+        return None
+
     # ----- Symbolic evaluation ----- #
-    
+
     def _eval(self, part = "full", **hints):
         raise NotImplementedError
 

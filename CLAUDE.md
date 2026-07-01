@@ -43,6 +43,17 @@ by relaxing it.
   auto-simplified by `simplify_external_dots` via the polarization identity
   `a.b = ((a+b)^2-a^2-b^2)/2`; this runs automatically inside
   `ReduceLoopIntegral`/`ReduceGeneralNumerator`.
+  **Display only** (`_sympystr`/`_latex`, `eval` untouched): when `a == b`,
+  `Dot(a,a)` prints as `a^2` (or `\left(...\right)^{2}` in LaTeX if `a`
+  isn't atomic, e.g. `Dot(k+p_1,k+p_1)` -> `(k + p_1)^2`) instead of the
+  literal `(a.a)`. This is purely cosmetic -- the object is still a real
+  `Dot` instance internally (`type(Dot(k,k)) is Dot`, not `Pow`), so the
+  substitution algebra and the `_validate_numerator` hard rule below still
+  see and pattern-match on `Dot(k,k)` exactly as before. Works for *any*
+  symbol automatically; the `k2`/`p2`/`p_12`-style placeholder symbols in
+  `symbols.py` are no longer needed just for pretty-printing (still useful
+  if you want a literal standalone symbol to substitute in for further
+  simplification).
 - `Eps(s1,s2,s3,s4)` -- Levi-Civita object for gamma_5 traces. Each slot is
   *either* a free Lorentz index *or* a momentum expression (mirrors how
   `Mom` packs momentum+index together). Totally antisymmetric: vanishes on
@@ -104,16 +115,111 @@ possible.
   `Tr[g5 * gamma^i1 gamma^i2 gamma^i3 gamma^i4] = GAMMA5_TRACE_COEFF * Eps(i1,i2,i3,i4)`,
   with `GAMMA5_TRACE_COEFF = -4*I` (states the convention explicitly --
   flip the sign if the user's metric/epsilon convention differs).
-  - Exactly one `G5` per term is handled; an even number should cancel via
-    `g5^2=1` but this is NOT auto-detected (raises `NotImplementedError`,
-    not a silent wrong answer -- intentional, don't "fix" by guessing).
+  - **Any number of `G5` markers per term is now supported** (previously:
+    exactly one, else `NotImplementedError`). `_cancel_g5_pairs(term)` runs
+    first and reduces the count to 0 or 1 via `G5**2 = 1`: it walks
+    `term.args` (physical left-to-right order -- zero-index `TensorHead`s
+    keep their position under multiplication, bug #6), repeatedly slides
+    the *second* `G5` of the first pair found leftward to meet the first
+    one, picking up a `(-1)` for every `GammaMatrix` factor passed (from
+    `{gamma5, gamma^mu} = 0`; momentum-head factors are ordinary vectors
+    and contribute no sign), then drops the adjacent pair. This is exactly
+    what's needed for a chiral vector/axial-vector coupling squared, e.g.
+    `(slash(p1)-m)*(g_V-g_A*Gamma5())*Gamma(mu)*(slash(p2)-m)*(g_V+g_A*Gamma5())*Gamma(nu)`
+    -- the `g_A**2` term has two non-adjacent `G5`'s. Verified by hand
+    against the standard V/A trace identity: the `g_V**2` piece reproduces
+    the plain vector trace exactly, `g_A**2` flips the sign of the
+    momentum cross-terms relative to it, and the `g_V*g_A` cross term
+    vanishes (needs a 3-gamma trace, identically zero) -- also verified
+    that a *triple* `G5` insertion reduces to the same result as a single
+    one, as required by `G5**2=1`.
+  - If cancellation leaves 0 `G5`'s, the term is a plain trace and is
+    routed through `from_gamma_trace(gamma_trace(term), momentum_map)`
+    (`term * Symbol("d")` directly, without calling `gamma_trace`, in the
+    degenerate edge case where *every* factor was a `G5` and nothing
+    physical is left).
   - Exactly 4 gamma matrices after stripping `G5` is the only nonzero case
-    implemented (0-3 correctly returns 0; 6+ needs the general identity
-    with extra `g.eps` terms -- not implemented).
-  - **NOT YET WIRED IN:** `ReduceGeneralNumerator` does not know what to do
-    with an `Eps(...)` factor in a numerator term yet. This is the
-    natural next piece if/when full automation through to PV functions is
-    wanted for chiral diagrams.
+    implemented for the single-`G5`-remaining branch (0-3 correctly
+    returns 0; 6+ needs the general identity with extra `g.eps` terms --
+    not implemented).
+  - **IMPLEMENTED:** `ReduceGeneralNumerator` handles `Eps(k, s2, s3, s4)`
+    by introducing a dummy Lorentz index `d`, feeding `Mom(k, d)` as an
+    extra open k-index into `TensorialDecomposition`, then calling
+    `contract_with_eps(result, d, Eps(d, s2, s3, s4))` to substitute the
+    reduced momentum back into the Eps slot. Pure-spectator `Eps` (no k in
+    any slot) passes through unchanged. Self-energy chiral traces vanish
+    correctly (Eps(p1,...,p1) = 0 after contraction).
+  - Common call-site mistake (not a bug): `Gamma5` is a **function** --
+    `g_A * Gamma5` multiplies by the function object itself and raises
+    `TypeError: unsupported operand type(s) for *: 'Symbol' and 'function'`.
+    Must call it: `g_A * Gamma5()`.
+
+## Dirac string display (`dirac.py`, `DiracMatrix`)
+
+`DiracMatrix` (the algebra object returned by `slash()`/`Gamma()`/`Gamma5()`
+and their products, consumed by `DiracTrace()`) used to `repr()` as an
+opaque `DiracMatrix(N terms)`. It now renders as real physics notation
+(`repr()` -> plain text with `γ^{mu}`/slashed-p unicode, `_repr_latex_()` ->
+`\gamma^{\mu}`, `\not{p_1}`, `\gamma_5` picked up automatically by Jupyter's
+`display()`), purely for human inspection *before* tracing -- this is
+display-only and untouched by `DiracTrace`/arithmetic, which still operate
+on the underlying sympy tensor objects in `self.terms`.
+
+Mechanism, in case it needs extending (e.g. for a new token kind):
+- `_GammaTok`, `_SlashTok`, `_Gamma5Tok` are internal `sp.Function`
+  subclasses marked `is_commutative = False`. That's the load-bearing
+  trick -- ordinary sympy `Mul` reorders commutative factors however it
+  likes, which would destroy the physical (non-commuting) gamma-matrix
+  order. Noncommutative `Mul` factors keep their input order.
+- `_term_factor_tokens(tensor, momentum_map)` walks `tensor.components` /
+  `tensor.get_indices()` in the same style as `from_gamma_trace` (see
+  above) to figure out, for each `GammaMatrix` slot in order, whether its
+  index is a dummy paired with a momentum-head component (-> `_SlashTok`)
+  or genuinely free (-> `_GammaTok`); `G5` components become
+  `_Gamma5Tok()`. Momentum-head components themselves emit no token of
+  their own -- they're absorbed into the preceding slash.
+- `DiracMatrix.as_sympy()` sums `coeff * product-of-tokens` over
+  `self.terms` (empty token list = identity = bare `1`, so scalar-only
+  terms just show their coefficient); `__repr__`/`_repr_latex_` print that.
+- Verified against `from_gamma_trace`'s exact index-pairing logic, so a
+  free-index name here is guaranteed to be either a real user-facing free
+  index (never contracted, since `Gamma(mu)` mints a fresh index object
+  each call) or one of `slash()`'s internal `_pvpy_c{n}` dummies (always
+  paired with its momentum head in the same term) -- no orphan dummy names
+  should ever leak into the display.
+
+## Design decisions raised and explicitly deferred (don't redo this debate)
+
+- **`DiracMatrix` always stores a flat, fully-expanded list of `(coeff,
+  tensor)` monomials (`self.terms`) -- there is no factored/tree form
+  retained anywhere.** `__mul__` builds this list as the full cross
+  product of the two operands' term lists, which is *why* multiplying
+  several chiral/mass factors together (e.g. the V/A trace example above)
+  necessarily explodes into every monomial before `display()` ever runs --
+  it's not a printing choice, the expansion already happened at
+  construction time. This is load-bearing: `DiracTrace` (and
+  `gamma5_trace`/`from_gamma_trace`) work by iterating `expr.terms` and
+  tracing each monomial independently.
+  - Question raised: can we keep it factored for display and only expand
+    when the user asks (`.expand()`)? Answer given and accepted: not
+    without a real redesign -- `DiracMatrix` would need to become a lazy
+    expression tree of un-multiplied sub-`DiracMatrix` objects, flattening
+    into `self.terms` only when `DiracTrace()` actually needs to trace it.
+    That's a change to the whole arithmetic layer for a display-only
+    benefit, and was **explicitly deferred** (not rejected -- just not
+    worth it right now). Workaround needing no code change: build named
+    sub-pieces (e.g. `L = (slash(p1)-m)*(g_V-g_A*Gamma5())`) and `display()`
+    those individually before combining them for the final trace -- each
+    piece alone stays as compact as it can be.
+- **Scope of the algebra layer (`g`/`Mom`/`Dot`/`Eps`/`DiracMatrix`) is
+  considered sufficient for the package's actual goal (1-loop PV
+  reduction) as of this session.** The user confirmed `Eps` usage
+  (`Eps(mu,nu,rho,sigma) * Mom(p,mu) * Mom(p,nu)` etc., already added to
+  `pvpy_tutorial.ipynb`) is enough and does not want further algebra
+  elaboration (e.g. the lazy-tree `DiracMatrix` redesign above, or richer
+  `Eps`/tensor features) unless a real need shows up later -- possibly
+  after publication. Don't proactively add algebra features beyond what's
+  asked; this is a considered decision, not an oversight.
 
 ## Bugs already found and fixed during development (don't reintroduce)
 
@@ -145,6 +251,39 @@ possible.
 6. **Zero-index `TensorHead` (`G5`) preserves its position in `TensMul`**
    when multiplied with other tensors -- verified empirically, this is
    what makes the gamma_5 position-sign-tracking trick work at all.
+7. **`from_gamma_trace` only handled a single free metric factor per term.**
+   It pooled every free (uncontracted) metric index from a term into one
+   flat list and only had branches for `len == 2` (emit one `g(mu,nu)`) or
+   `len == 1` (raise `NotImplementedError`). A term with **two independent**
+   free metric factors -- e.g. `tr[gamma^mu gamma^nu gamma^rho gamma^sigma]`
+   produces terms like `metric(mu,rho)*metric(nu,sigma)` -- has 4 free
+   indices belonging to 2 different metric components, hit neither branch,
+   and silently dropped both `g(...)` factors, leaving only the numeric
+   coefficient (`DiracTrace(Gamma(mu)*Gamma(nu)*Gamma(rho)*Gamma(sigma))`
+   returned bare `4` instead of the correct
+   `4*(g(mu,nu)*g(rho,sigma) - g(mu,rho)*g(nu,sigma) + g(mu,sigma)*g(nu,rho))`).
+   Fix: tag each occurrence with the id of the tensor component it came
+   from, and reconstruct one `g(...)` per component that has *both* its
+   indices still free, instead of grouping by index-list-length alone.
+   Caught via the tutorial notebook's `Gamma(mu)*Gamma(nu)*Gamma(rho)*Gamma(sigma)`
+   smoke test -- worth keeping that exact case in mind as a regression
+   check since it's the simplest input that exercises multiple independent
+   metric factors in one term.
+8. **`getattr(term, "coeff", term)` is not a safe "is this a tensor"
+   check** -- every plain `sympy.Expr` (a bare `Integer`, `Symbol`, ...)
+   already has an unrelated `.coeff` *method* (`Expr.coeff(x)`, for
+   extracting the coefficient of `x`), so the `getattr` default never
+   triggers for a non-tensor `term`; it silently returns a bound method
+   object instead of `term` itself, and downstream `sp.sympify(...)` on
+   that bound method blows up with a `SympifyError`/deprecation warning
+   about `sympify()`'s string fallback. Surfaced in both
+   `from_gamma_trace` and `gamma5_trace` once `_cancel_g5_pairs` (bug/
+   feature #7's sibling, see the `gamma5_trace` entry above) started
+   producing terms whose full `gamma_trace(term)` is identically
+   `sp.Integer(0)` (an odd-gamma-count trace vanishes exactly). Fix: check
+   `hasattr(term, "components")` first (a real distinguishing feature of
+   tensor objects) and only then read `term.coeff`/`term.components`/
+   `term.get_indices()` directly; for a plain scalar `term`, use it as-is.
 
 ## Known limitations / honest TODO list
 
@@ -160,8 +299,8 @@ possible.
   be linear in the *same* elementary momentum symbols used in the
   propagator shifts. Fails loudly (clear `ValueError`) if not -- this is
   intentional, not a bug.
-- `Eps` is not yet consumed by `ReduceGeneralNumerator` (see gamma_5
-  section above).
+- `Eps` handling in `ReduceGeneralNumerator` is now implemented (see
+  gamma_5 section above for the contract_with_eps approach).
 - PV function mass argument convention is currently "mass" (`m`), not
   "mass-squared" (`m^2`). This works (verified) but produces intermediate
   chain-rule artifacts during mass-derivatives that only resolve once a
@@ -183,8 +322,14 @@ possible.
 ## Quick smoke test
 
 ```
-python3 tensorial_decomposition.py
+python3 -m pvpy.tensorial_decomposition
 ```
+
+Run from the project root (`PVpy_project/`, the parent of `pvpy/`) -- the
+module uses relative imports (`from .algebra import ...`), so invoking it
+directly as a script (`python3 pvpy/tensorial_decomposition.py`) fails with
+`ImportError: attempted relative import with no known parent package`;
+it must be run as a package module with `-m`.
 
 Runs the `__main__` block: A0/A00 (tadpole), B0/B1/B00/B11 (bubble),
 k.p1 and k^2 via contraction helpers, C0 and full rank-3 triangle
@@ -192,3 +337,16 @@ decomposition (check it has exactly 6 terms: C001,C002,C111,C112,C122,
 C222 -- this count is a correctness check, matches standard PV tables),
 and the gamma_5 chiral self-energy demo (should print `4*I*eps^{...}`
 with the k.k piece having vanished).
+
+For `dirac.py` specifically, `pvpy_tutorial.ipynb` (project root) is the
+live regression check -- in particular:
+- `DiracTrace(Gamma(mu)*Gamma(nu)*Gamma(rho)*Gamma(sigma))` should give
+  `4*g(mu,nu)*g(rho,sigma) - 4*g(mu,rho)*g(nu,sigma) + 4*g(mu,sigma)*g(nu,rho)`
+  (bug #7 above).
+- `display()`-ing any `DiracMatrix` before tracing it should render as
+  readable LaTeX rather than `DiracMatrix(N terms)`.
+- The V/A trace
+  `DiracTrace((slash(p1)-m)*(g_V-g_A*Gamma5())*Gamma(mu)*(slash(p2)-m)*(g_V+g_A*Gamma5())*Gamma(nu))`
+  should give only `g_V**2` and `g_A**2` terms (no `g_V*g_A` cross term),
+  with the `g_A**2` momentum cross-terms sign-flipped relative to `g_V**2`
+  (bug/feature entry under `gamma5_trace` above, bug #8).
