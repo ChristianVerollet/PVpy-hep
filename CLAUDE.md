@@ -101,6 +101,49 @@ instead pulls in `B00`/`B11` placeholders even when the final contracted
 answer is expressible purely via `A0`/`B0`. Prefer Method A whenever
 possible.
 
+## Package structure (as of current session)
+
+```
+pvpy/
+  __init__.py              — re-exports everything listed below
+  algebra.py               — g, Mom, Dot, Eps, contract, simplify_external_dots
+  tensorial_decomposition.py — LoopIntegral, Propagator, TensorialDecomposition,
+                               ReduceGeneralNumerator, contract_with_metric/momentum/eps,
+                               from_gamma_trace, gamma5_trace, G5, GAMMA5_TRACE_COEFF
+                               (imports algebra objects via `from .algebra import ...`
+                               and re-exports them for backward compatibility)
+  dirac.py                 — DiracMatrix, slash, Gamma, Gamma5, DiracTrace
+  symbols.py               — pre-defined sympy Symbols (momenta, masses, indices)
+  base.py                  — PVFunction base class
+  simplify.py              — set_kinematics, reduce_pv
+  functions/
+    __init__.py            — A0, B0, B00, A00, B1
+    scalar.py              — A0, B0, B00 (primitives)
+    tensors.py             — A00, B1 (derived)
+```
+
+`algebra.py` was split out of `tensorial_decomposition.py` to give a clean
+import layer: `from pvpy.algebra import g, Mom, Dot, Eps, contract`. Old
+imports like `from pvpy.tensorial_decomposition import g, Mom` still work
+via the re-export.
+
+## Convention — metric, ε, γ₅ sign (settled, don't change)
+
+Metric: (+,−,−,−).  Levi-Civita: `ε_{0123} = +1` (lower indices, "physics"
+convention).
+
+γ₅ definition: **γ₅ = −i γ⁰γ¹γ²γ³** (Itzykson-Zuber / Package-X sign, not
+Peskin-Schroeder).  This determines the trace:
+  - `Tr[γ₅ γ^μ γ^ν γ^ρ γ^σ] = −4i ε^{μνρσ}` (upper ε)
+  - `Tr[γ₅ γ_μ γ_ν γ_ρ γ_σ] = −4i ε_{μνρσ}` (lower ε)
+
+**`GAMMA5_TRACE_COEFF = +4*sp.I`** in `tensorial_decomposition.py`.
+
+If you see it as `−4*sp.I` that's the Peskin-Schroeder sign (`γ₅=+iγ⁰...`);
+changing it flips only the chiral cross-term `g_V*g_A`, not the `g_V²`/`g_A²`
+pieces, so the sign difference is subtle and easy to miss without an explicit
+comparison against Package-X output (which was done to confirm the current sign).
+
 ## Gamma matrices / traces
 
 - `from_gamma_trace(trace_expr, momentum_map)` converts ordinary
@@ -153,6 +196,74 @@ possible.
     `g_A * Gamma5` multiplies by the function object itself and raises
     `TypeError: unsupported operand type(s) for *: 'Symbol' and 'function'`.
     Must call it: `g_A * Gamma5()`.
+
+## `dirac.py` — user-facing Dirac algebra API
+
+The public interface (all exported from `pvpy`):
+
+```python
+slash(p)          # γ·p = γ^a p_a  (p is a sympy Symbol)
+Gamma(mu)         # γ^μ  with free index mu (sympy Symbol)
+Gamma5()          # γ₅  — note: must be called, Gamma5 alone is the class
+DiracTrace(expr)  # Tr[expr], auto-detects γ₅ presence
+```
+
+`slash`, `Gamma`, `Gamma5` return `DiracMatrix` objects.  Arithmetic `+`, `-`,
+`*`, scalar multiplication all work.  Scalars (plain sympy expressions, ints,
+floats) can be added or multiplied freely; they land in the scalar-coefficient
+part of each term and are carried through to the trace output unchanged.
+
+**Typical workflow:**
+
+```python
+expr = (slash(p1) - m) * Gamma(mu) * (g_V - g_A*Gamma5()) * (slash(p2) - m) * (g_V + g_A*Gamma5()) * Gamma(nu)
+trace = DiracTrace(expr)        # returns sympy expr in g/Mom/Dot/Eps
+result = contract(trace * propagator_numerator)   # Einstein sum over free indices
+```
+
+**Critical: take the trace BEFORE contracting.**  `contract` only understands
+`g`/`Mom`/`Dot`/`Eps` sympy objects — it does not know about `DiracMatrix`
+internals.  Calling `contract(dirac_matrix * something)` will not contract the
+Dirac free indices with the external tensor; `DiracMatrix.__mul__` will absorb
+the external expression as a *scalar coefficient* of each term, which is
+wrong.  Always: `contract(DiracTrace(expr) * external_tensor)`.
+
+**`Gamma5()` must be called (with parentheses).**  `g_A * Gamma5` silently
+multiplies by the *class object* itself, not an instance, and raises
+`TypeError` later.  This is already noted in the CLAUDE.md gamma_5 section but
+is easy to hit again — mentioned here because it's the most common call-site
+mistake in practice.
+
+`DiracTrace` auto-detects γ₅: if any term contains a `G5` component, it
+dispatches to `gamma5_trace`; otherwise to `gamma_trace + from_gamma_trace`.
+Zero-trace guard: `gamma_trace` returns `sp.Integer(0)` for odd-count gamma
+products; `DiracTrace` checks `if traced == sp.S.Zero: continue` before
+calling `from_gamma_trace` (which would blow up on a plain integer, bug #8).
+
+## `contract()` — Einstein summation (algebra.py)
+
+```python
+from pvpy import contract
+result = contract(expr)          # auto-detects all repeated indices
+result = contract(expr, d=sp.Symbol('d'))  # custom dimension symbol (default: sp.Symbol('d'))
+```
+
+Rules applied iteratively until stable (term by term after `sp.expand`):
+- `g(a, a)  → d`
+- `g(a,b) * Mom(p,a) → Mom(p,b)`
+- `g(a,b) * g(a,c)   → g(b,c)`
+- `Mom(p,a) * Mom(q,a) → Dot(p,q)`
+- `g(a,b) * Eps(a,...) → Eps(b,...)`
+- `Mom(p,a) * Eps(a,...) → Eps(p,...)`
+
+Index detection convention: both args of `g` are indices; only the **second**
+arg of `Mom(p, mu)` is an index (first is a momentum — never tracked); all
+four args of `Eps` are treated as potential indices.  This prevents momentum
+symbols appearing in the first slot of `Mom` from being mis-identified as
+repeated indices.
+
+`Eps*Eps` contractions are **not** implemented — they produce complex
+combinations of metric determinants and are left as-is.
 
 ## Dirac string display (`dirac.py`, `DiracMatrix`)
 
@@ -285,6 +396,30 @@ Mechanism, in case it needs extending (e.g. for a new token kind):
    tensor objects) and only then read `term.coeff`/`term.components`/
    `term.get_indices()` directly; for a plain scalar `term`, use it as-is.
 
+9. **`_GammaTok._latex` / `_SlashTok._latex` / `_Gamma5Tok._latex` must
+   accept `**kwargs` / `exp=None`.** Sympy's `_print_Pow` calls the base
+   object's `_latex(printer, exp=<exponent_string>)` so the object can render
+   itself with the exponent attached (e.g. `\left(\gamma_5\right)^{2}`).  Any
+   display token class that only declares `_latex(self, printer)` will receive
+   an unexpected `exp` keyword argument and raise `TypeError` when that token
+   appears squared (e.g. `_Gamma5Tok()**2`).  This happens for `Gamma5()`
+   whenever a product contains two γ₅ insertions that haven't been cancelled
+   yet — `as_sympy()` / `DiracMatrix.__repr__` / `_repr_latex_()` all blow
+   up.  Fix: add `def _latex(self, printer, exp=None): ...` (with `if exp is
+   not None: return r'\left(...\right)^{%s}' % exp`) and `def _latex(self,
+   printer, **kwargs): ...` for `_GammaTok`/`_SlashTok` where exponents don't
+   arise in practice.
+
+10. **`contract()` didn't handle `Pow(g/Mom/Eps, n)`.** Sympy collapses
+    `g(mu,nu) * g(mu,nu)` into `g(mu,nu)**2` (a `Pow` object) before
+    `contract` ever sees it.  The factor collection loop only looked for
+    `isinstance(f, (g, Mom, Eps))` so `Pow` objects silently ended up in
+    `scalar_part` and were never contracted — `g(mu,nu)**2` stayed as-is
+    instead of reducing to `d`, `Mom(k,nu)**2` stayed instead of becoming
+    `Dot(k,k)`.  Fix: also check `isinstance(f, sp.Pow) and isinstance(f.base,
+    (g, Mom, Eps)) and f.exp.is_integer and f.exp.is_positive` in the factor
+    loop and expand into `int(f.exp)` copies of `f.base`.
+
 ## Known limitations / honest TODO list
 
 - `ReduceLoopIntegral`/`ReduceGeneralNumerator` do a **single** substitution
@@ -343,10 +478,15 @@ live regression check -- in particular:
 - `DiracTrace(Gamma(mu)*Gamma(nu)*Gamma(rho)*Gamma(sigma))` should give
   `4*g(mu,nu)*g(rho,sigma) - 4*g(mu,rho)*g(nu,sigma) + 4*g(mu,sigma)*g(nu,rho)`
   (bug #7 above).
-- `display()`-ing any `DiracMatrix` before tracing it should render as
-  readable LaTeX rather than `DiracMatrix(N terms)`.
+- `display()`-ing any `DiracMatrix` before tracing it, **including expressions
+  containing `Gamma5()`**, should render as readable LaTeX without crashing
+  (bug #9 above — previously exploded when γ₅ appeared squared before tracing).
 - The V/A trace
-  `DiracTrace((slash(p1)-m)*(g_V-g_A*Gamma5())*Gamma(mu)*(slash(p2)-m)*(g_V+g_A*Gamma5())*Gamma(nu))`
+  `DiracTrace((slash(p1)+m)*Gamma(mu)*(g_V-g_A*Gamma5())*(slash(p2)-m)*(g_V+g_A*Gamma5())*Gamma(nu))`
   should give only `g_V**2` and `g_A**2` terms (no `g_V*g_A` cross term),
-  with the `g_A**2` momentum cross-terms sign-flipped relative to `g_V**2`
-  (bug/feature entry under `gamma5_trace` above, bug #8).
+  with the chiral `8i*g_A*g_V*Eps(mu,nu,p1,p2)` term matching Package-X sign
+  exactly (GAMMA5_TRACE_COEFF = +4i, settled in convention section above).
+- `contract(DiracTrace(expr) * g(mu,nu))` should produce a fully-contracted
+  scalar with no residual `g^{munu}**2` or `k^{nu}**2` factors (bug #10).
+  Correct order: trace first, then contract.  Passing a `DiracMatrix` directly
+  to `contract` silently does the wrong thing (see `dirac.py` API section).

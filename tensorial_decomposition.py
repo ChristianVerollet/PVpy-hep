@@ -416,10 +416,16 @@ def from_gamma_trace(trace_expr, momentum_map: Dict[object, sp.Expr]) -> sp.Expr
 # 5e. Gamma-5 traces
 # ---------------------------------------------------------------------------
 # Convention (state explicitly, flip GAMMA5_TRACE_COEFF if yours differs):
-#   Tr[g5 * gamma^i1 gamma^i2 gamma^i3 gamma^i4] = GAMMA5_TRACE_COEFF * Eps(i1,i2,i3,i4)
-# Standard choice: GAMMA5_TRACE_COEFF = -4*I  (g5 = i*g0g1g2g3, Tr[1]=4, eps^{0123}=+1)
+#   Tr[γ₅ γ^{i1} γ^{i2} γ^{i3} γ^{i4}] = GAMMA5_TRACE_COEFF * Eps(i1,i2,i3,i4)
+#
+# Metric (+,−,−,−), ε_{0123} = +1 (lower, "physics" convention).
+# γ₅ = −i γ^0 γ^1 γ^2 γ^3  (Itzykson-Zuber / Package-X sign)
+# → Tr[γ₅ γ_μ γ_ν γ_ρ γ_σ] = −4i ε_{μνρσ}  (lower ε)
+# → Tr[γ₅ γ^μ γ^ν γ^ρ γ^σ] = +4i ε^{μνρσ}  (upper ε, ε^{0123} = −1 from ε_{0123}=+1)
+#
+# Use GAMMA5_TRACE_COEFF = −4*I (P&S sign) if you define γ₅ = +i γ^0 γ^1 γ^2 γ^3 instead.
 
-GAMMA5_TRACE_COEFF = -4 * sp.I
+GAMMA5_TRACE_COEFF = 4 * sp.I
 
 G5 = TensorHead("G5", [])  # zero-index marker: insert G5() at gamma5's position in the product
 

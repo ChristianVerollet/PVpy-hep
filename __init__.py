@@ -1,4 +1,4 @@
-from .algebra import g, Mom, Dot, Eps
+from .algebra import g, Mom, Dot, Eps, contract
 
 from .tensorial_decomposition import (
     LoopIntegral, Propagator,
@@ -15,7 +15,7 @@ from .functions import A0, B0, B00, A00, B1
 
 __all__ = [
     # algebra
-    "g", "Mom", "Dot", "Eps",
+    "g", "Mom", "Dot", "Eps", "contract",
     # reduction engine
     "LoopIntegral", "Propagator",
     "TensorialDecomposition", "ReduceGeneralNumerator",

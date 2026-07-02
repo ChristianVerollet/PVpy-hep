@@ -80,7 +80,7 @@ class _GammaTok(sp.Function):
     def _sympystr(self, printer):
         return f"γ^{{{printer._print(self.args[0])}}}"
 
-    def _latex(self, printer):
+    def _latex(self, printer, **kwargs):
         return r"\gamma^{%s}" % printer._print(self.args[0])
 
 
@@ -91,7 +91,7 @@ class _SlashTok(sp.Function):
     def _sympystr(self, printer):
         return f"{printer._print(self.args[0])}̸"
 
-    def _latex(self, printer):
+    def _latex(self, printer, **kwargs):
         return r"\not{%s}" % printer._print(self.args[0])
 
 
@@ -102,8 +102,11 @@ class _Gamma5Tok(sp.Function):
     def _sympystr(self, printer):
         return "γ₅"
 
-    def _latex(self, printer):
-        return r"\gamma_5"
+    def _latex(self, printer, exp=None):
+        s = r"\gamma_5"
+        if exp is not None:
+            return r"\left(%s\right)^{%s}" % (s, exp)
+        return s
 
 
 def _term_factor_tokens(tensor, momentum_map):
