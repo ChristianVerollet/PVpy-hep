@@ -156,6 +156,13 @@ def contract(expr: sp.Expr, d: sp.Symbol = sp.Symbol("d")) -> sp.Expr:
         g(a, b)*Eps(a,...) → Eps(b,...)
         Mom(p, a)*Eps(a,...) → Eps(p,...)
     """
+    if not isinstance(expr, sp.Basic):
+        raise TypeError(
+            f"contract() expects a sympy expression (g/Mom/Dot/Eps), "
+            f"got {type(expr).__name__}.\n"
+            f"Hint: take the trace first — contract(DiracTrace(expr) * other), "
+            f"not contract(expr * other)."
+        )
     expr = sp.expand(expr)
     if expr.is_Add:
         return sp.expand(sp.Add(*[contract(t, d) for t in expr.args]))

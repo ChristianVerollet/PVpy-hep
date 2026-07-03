@@ -265,6 +265,34 @@ repeated indices.
 `Eps*Eps` contractions are **not** implemented — they produce complex
 combinations of metric determinants and are left as-is.
 
+**Input guard:** `contract()` raises a clear `TypeError` with a hint message
+if it receives a non-sympy object (e.g. a `DiracMatrix`).  Before the guard
+was added, the failure manifested as an obscure `SympifyError` deep inside
+`sp.expand` via sympy's deprecated string-fallback.  The guard is:
+```python
+if not isinstance(expr, sp.Basic):
+    raise TypeError(
+        f"contract() expects a sympy expression ... got {type(expr).__name__}.\n"
+        f"Hint: take the trace first — contract(DiracTrace(expr) * other), ..."
+    )
+```
+
+**`set_kinematics` works on any sympy expression**, not only on PV-function
+expressions.  It is simply `sp.expand(expr.subs(substitutions))`, so it
+handles `Dot`, `Mom`, `g`, `Eps` objects transparently.  The `d=4`
+substitution is just another entry in the same dict:
+```python
+result = set_kinematics(result, {
+    Dot(k, k): m_Z**2,
+    Dot(p_1, p_2): (m_Z**2 - 2*m**2) / 2,
+    sp.Symbol('d'): 4,          # set spacetime dimension to 4
+})
+```
+**Caution:** for loop integrals, set `d=4` only *after* UV divergences have
+cancelled (renormalization / finite quantity).  The `d` from trace prefactors
+and the `d` implicit in PV function definitions are linked — premature
+substitution hides the poles before they can cancel.
+
 ## Dirac string display (`dirac.py`, `DiracMatrix`)
 
 `DiracMatrix` (the algebra object returned by `slash()`/`Gamma()`/`Gamma5()`
