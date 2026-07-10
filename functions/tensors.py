@@ -59,10 +59,10 @@ class B1(PVFunction):
     """
     Rank-1 bubble tensor coefficient: int k^mu / (D_0 D_1) = p^mu B_1(p^2, m0, m1)
 
-    Convention: D_0 = k^2 - m0^2,  D_1 = (k+p)^2 - m1^2  (shift in propagator 1).
+    Convention: D_0 = k^2 - m0^2,  D_1 = (k-p)^2 - m1^2  (shift in propagator 1).
 
-    Reduction derived from 2k·p = D_1 - D_0 + (m1^2 - m0^2 - p^2):
-        B_1(p^2, m0, m1) = [A_0(m0) - A_0(m1) - (p^2 + m0^2 - m1^2) B_0] / (2 p^2)
+    Reduction derived from 2k·p = D_0 - D_1  + (p² + m0² - m1²):
+        B_1(p^2, m0, m1) = [A_0(m1) - A_0(m0) + (p^2 + m0^2 - m1^2) B_0] / (2 p^2)
 
     The numerator vanishes at p^2=0 (it is a 0/0 limit), so B_1 is finite there,
     but the reduction formula itself is undefined at p^2=0 — see the p^2=0 guard

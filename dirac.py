@@ -273,15 +273,29 @@ def slash(p):
     Slashed momentum  γ·p = γ^a p_a.
 
     The contracted Lorentz index is generated automatically; the user never
-    has to name it.
+    has to name it. **Linear in `p`**, same as `Mom`: `slash(k+p)` ->
+    `slash(k) + slash(p)`, `slash(2*p)` -> `2*slash(p)`. This matters in
+    practice because loop calculations constantly need slashed *shifted*
+    momenta (e.g. `slash(k+p)` for a shifted propagator numerator).
 
     Parameters
     ----------
-    p : sympy Symbol
-        A single momentum symbol (e.g. sp.Symbol('p1')).
-        For shifted momenta like p1+p2, define a new symbol or expand
-        the trace product manually.
+    p : sympy Symbol, or a sympy expression built from momentum symbols
+        via +, -, and scalar multiplication (e.g. `k + p1 - 2*p2`).
+        Each atomic momentum still needs its own name -- slash() labels
+        the internal TensorHead after it.
     """
+    p = sp.expand(sp.sympify(p))
+    if p.is_Add:
+        result = DiracMatrix([], {})
+        for term in p.args:
+            result = result + slash(term)
+        return result
+    if p == 0:
+        return DiracMatrix([], {})
+    coeff, rest = p.as_coeff_Mul()
+    if coeff != 1:
+        return coeff * slash(rest)
     a = _fresh_idx()
     head = TensorHead(f"{p.name}_pvpy", [LorentzIndex])
     return DiracMatrix([(sp.Integer(1), _G(a) * head(-a))], {head: p})
