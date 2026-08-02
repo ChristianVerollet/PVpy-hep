@@ -196,13 +196,13 @@ class B0(PVFunction):
         R = - (Lambda/p2) * sp.log( (m1**2 + m2**2 - p2 + Lambda)/(2 * m1 * m2) )
 
         if part == "full":
-            return 1/epsilon_bar - sp.log(m2**2 / mu**2) + 2 + ( (m1**2 - m2**2 + p2)/(2 * p2) ) * sp.log( m1**2/m2**2) - R
+            return 1/epsilon_bar - sp.log(m2**2 / mu**2) + 2 + ( (m2**2 - m1**2 + p2)/(2 * p2) ) * sp.log( m1**2/m2**2) - R
         
         elif part == "pole":
             return 1 
         
         elif part == "finite":
-            return 2 + ( (m1**2 - m2**2 + p2)/(2 * p2) ) * sp.log( m1**2/m2**2) - R - sp.log(m2**2 / mu**2)
+            return 2 + ( (m2**2 - m1**2 + p2)/(2 * p2) ) * sp.log( m1**2/m2**2) - R - sp.log(m2**2 / mu**2)
  
     def _eval(self, part = "full", **hints):
         """
