@@ -28,6 +28,7 @@ from typing import List, Tuple, Dict, Optional, Sequence
 import sympy as sp
 
 from .algebra import g, Mom, Dot, Eps, simplify_external_dots
+from .functions import A0, A00, B0, B1, B11, B00
 
 
 # ---------------------------------------------------------------------------
@@ -61,8 +62,15 @@ class LoopIntegral:
 
     @property
     def independent_momenta(self) -> Dict[int, sp.Expr]:
-        """Label i (1..N-1) -> q_i. These are the basis momenta used in the ansatz."""
-        return {i: self.propagators[i].shift for i in range(1, self.N)}
+        """Label i (1..N-1) -> (q_0 - q_i), the external momentum basis for the PV ansatz.
+
+        The PV decomposition convention is k^μ = p_ext^μ * B1 + ...,
+        where p_ext = q_0 - q_i is the momentum flowing into propagator i.
+        Using the propagator shift q_i directly (= -p_ext for standard routing)
+        would give wrong signs for all odd-rank tensor coefficients.
+        """
+        q0 = self.propagators[0].shift
+        return {i: sp.expand(q0 - self.propagators[i].shift) for i in range(1, self.N)}
 
     @property
     def masses(self) -> List[sp.Expr]:
@@ -136,9 +144,12 @@ def pv_name(N: int, label: Tuple[int, ...]) -> str:
 # you can fill in later as you implement more PV functions (B1, B11, C0, ...).
 
 PV_REGISTRY: Dict[str, callable] = {
-    # "A0": A0,
-    # "B0": B0,
-    # "B00": B00,
+    "A0":  A0,
+    "A00": A00,
+    "B0":  B0,
+    "B1":  B1,
+    "B00": B00,
+    "B11": B11,
 }
 
 

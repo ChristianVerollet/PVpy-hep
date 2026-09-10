@@ -115,12 +115,12 @@ pvpy/
   dirac.py                 — DiracMatrix, slash, Gamma, Gamma5, DiracTrace
   symbols.py               — pre-defined sympy Symbols (momenta, masses, indices)
   base.py                  — PVFunction base class
-  simplify.py              — set_kinematics, reduce_pv
+  simplify.py              — set_kinematics, PV_simplify, PV_reduce, Project, reduce_pv (legacy)
   functions/
     __init__.py            — imports A0, A00, A0000 from A_functions.py;
-                             B0, dB0_dp2, B1 from B_functions.py (canonical)
+                             B0, dB0_dp2, B1, B11, B00 from B_functions.py (canonical)
     A_functions.py         — A0, A00, A0000  ← canonical, use this
-    B_functions.py         — B0, dB0_dp2, B1 ← canonical, all validated
+    B_functions.py         — B0, dB0_dp2, B1, B11, B00 ← canonical, all validated
     scalar.py              — LEGACY: A0, B0, B00 — DO NOT IMPORT (pollutes subclass registry)
     tensors.py             — LEGACY: A00, B1 — superseded
 ```
@@ -448,6 +448,33 @@ Mechanism, in case it needs extending (e.g. for a new token kind):
    printer, **kwargs): ...` for `_GammaTok`/`_SlashTok` where exponents don't
    arise in practice.
 
+11. **`PV_REGISTRY` was entirely commented out** in `tensorial_decomposition.py`.
+    `get_pv_function` fell back to `sp.Function(name)(*args)` for every PV function,
+    creating anonymous sympy `Function` subclasses with the right name but a **different
+    Python class** than `pvpy.B11`, `pvpy.B00`, etc. `PV_reduce` uses
+    `expr.atoms(B11)` which checks class identity (`isinstance`), so it found nothing
+    and did nothing — silently returning the unreduced expression. Fix: import all
+    implemented PV functions at the top of `tensorial_decomposition.py` and populate
+    `PV_REGISTRY = {"A0": A0, "A00": A00, "B0": B0, "B1": B1, "B00": B00, "B11": B11}`.
+
+12. **`independent_momenta` used propagator shifts `q_i` as basis vectors** for the tensor
+    ansatz, but the PV decomposition convention uses the **external momentum** `q_0 − q_i`
+    (= `−q_i` when `q_0=0`). For even powers of the basis vector the sign cancels
+    (B00, B11 unaffected — `(−p)^μ(−p)^ν = p^μp^ν`), but **odd powers flip sign**:
+    `(−p)^μ·B1` was returned instead of `p^μ·B1`. In practice: the `p^μp^ν B1`
+    coefficient from `ReduceGeneralNumerator` had the wrong sign, violating the Ward
+    identity (`L = A + p²B ≠ 0` instead of 0). Fix: change `independent_momenta` to
+    return `{i: q_0 − q_i}` so the basis vector is the physical external momentum.
+
+13. **`pvpy.symbols.p2` is `Symbol('p^2')`, not `p**2`.** Several places in the
+    codebase and user code look like they should use the algebraic square `p**2`
+    (as it appears in PV function arguments from `kinematic_args`), but import
+    `p2` from `pvpy.symbols` thinking it is that quantity. They are different sympy
+    objects: `sp.Symbol('p^2') ≠ sp.Pow(Symbol('p'), 2)`. The `Project` function
+    originally accepted `p2` as an explicit argument; it now computes `p**2`
+    internally to eliminate this confusion entirely. Do not pass `pvpy.symbols.p2`
+    where the algebraic `p**2` is needed.
+
 10. **`contract()` didn't handle `Pow(g/Mom/Eps, n)`.** Sympy collapses
     `g(mu,nu) * g(mu,nu)` into `g(mu,nu)**2` (a `Pow` object) before
     `contract` ever sees it.  The factor collection loop only looked for
@@ -511,615 +538,56 @@ Mechanism, in case it needs extending (e.g. for a new token kind):
   - `C0`, `C00`, `C001`, etc. (3-point) are still undefined placeholder
     `sympy.Function`s (via `get_pv_function`'s fallback) unless added to
     `PV_REGISTRY`; not addressed by the above, still open.
-  - **`reduce_pv`/`simplify.py`'s intended role going forward:** apply
-    known-good, *general* (never kinematically-singular) linear identities
-    among PV functions as **forward, pattern-matched substitutions only**
-    -- e.g. replace the literal combination `p²*B11 + d*B00` with
-    `A0 + m0**2*B0` *only when that exact combination appears* in an
-    expression. **Never** invert such an identity to solve for/isolate an
-    individual tensor coefficient (e.g. don't use it to eliminate `B00`
-    from an expression that doesn't already contain the matching
-    combination) -- that inversion is exactly the ill-defined-at-`p²=0`
-    trap above. Exact relations to implement are still being worked out
-    with the user; ask for the precise identity before hard-coding one.
-
-## `functions/scalar.py` is being fully rewritten from `articles/guide.tex` (in progress, 2026-07-09)
-
-**Do not trust the current `functions/scalar.py` as a source of truth.**
-The user explicitly said so after a confirmed bug was found in it (below):
-`articles/guide.tex` (the paper the user is writing, which derives every PV
-function from scratch and states the analytic formula for each kinematic
-case) is the authoritative reference from now on. The user's stated plan:
-replace everything currently in `scalar.py` with the formulas from
-`guide.tex`, adopting the two-tier architecture worked out today (see next
-subsection) instead of the current file's more complex multi-branch
-relative-threshold masking. If you're asked to touch `scalar.py`, check
-`guide.tex` first and expect the file to look quite different from what's
-described in older parts of this document.
-
-### Confirmed bug found in current `B0._eval_general` / `f_general`
-
-Both `B0._eval_general` (scalar.py ~L191-205) and the numeric
-`f_general` (scalar.py ~L241-251) have the term
-```python
-+ ((m1**2 - m2**2 + p2)/(2*p2)) * np.log(m1**2/m2**2)
-```
-with the **wrong sign** -- it should be **subtracted**, not added. This is
-not merely a small-`p²` numerical-stability issue: it's wrong across the
-*entire* domain (confirmed off by orders of magnitude even at `p²=0.2`,
-`m1=2, m2=2.7`, nowhere near any degenerate point). Root cause: traces back
-to the `m0/m1` vs `m1/m2` argument-labeling mismatch already flagged in
-`guide.tex` (see next paragraph) -- under the correct mapping, the guide's
-`(m1²−m0²+p²)` term becomes `(m2²−m1²+p²)` in the code's variable names,
-opposite sign from what's coded as `(m1²−m2²+p²)`.
-
-**How this was found/verified, worth reusing as a technique:** cross-checked
-`f_general`'s output against direct numerical integration
-(`scipy.integrate.quad`) of the Feynman-parameter integral
-`B0_finite = -∫₀¹ dx ln(χ(x)/μ²)`, `χ(x) = x²p² - x(p²+m1²-m2²) + m1²`
-(this integral form is first-principles, from `guide.tex` eq. 197, and
-doesn't go through the Källén-function `Λ`/`R` machinery at all, so it's a
-genuinely independent reference). With the sign flipped, the two methods
-agree to machine precision (`~1e-14`) across a wide mass/`p²` range; as
-currently coded they disagree by orders of magnitude. **This
-Feynman-integral cross-check is the right way to validate any future
-closed-form PV formula** -- prefer it over eyeballing Källén-function
-algebra, which is extremely easy to get a sign wrong in (this session hit
-that same `m0/m1` sign confusion repeatedly, in the guide's prose, in the
-code, and almost in the small-`p²` derivation below).
-
-**Not yet fixed in the file** -- the user is doing a full replacement per
-above rather than patching this one line, so don't be surprised if this
-exact bug is simply gone (superseded) rather than fixed-in-place next time
-you look.
-
-**Also worth checking when the rewrite happens:** `B00`, `dB0_dp2`,
-`dB00_dp2` each have their *own* separately-coded `_eval_general`/
-`f_general` (not calls into `B0`), which look like they may share the same
-copy-pasted-and-mis-signed origin -- don't assume they're fine just because
-`B0`'s was fixed.
-
-### `guide.tex` proofreading note (not urgent, cosmetic)
-
-Several equations declare the function signature as `B_0(p²,m_1,m_2)` /
-`B_00(p²,m_1,m_2)` but then use `m_0, m_1` inside the body (e.g. guide.tex
-lines 299-306, 331-342, 395-402, 411-413) -- an `m_1,m_2` -> `m_0,m_1`
-argument-list labeling slip, consistent throughout, not a physics error
-once you know to substitute. This is almost certainly what caused/
-contributed to the sign confusion in the bug above -- worth cleaning up in
-the paper since it's an easy trap for whoever implements from it next
-(including future Claude sessions). Minor typos also noted: "inetgrals"
-(§3.1 title), "Derivativ" used inconsistently vs "Derivative", "comports"
-(probably meant "carries"/"has") -- low priority.
-
-### Two-tier small-`p²` architecture, decided 2026-07-09 — **SUPERSEDED 2026-08-01**
-
-> **Superseded by the Feynman-parameter numerical architecture below.**  
-> The algebraic identity derived here remains correct and is recorded as
-> a useful cross-check identity, but the two-tier closed-form approach has
-> been abandoned in favour of direct numerical integration for all kinematic
-> cases. Read the "Primary numerical architecture" section that follows.
-
-Replaces the current file's per-mass-case `F_general`/`F_expanded`
-relative-threshold masking (`f_p2_zero_m_non_zero` and its clones in
-`B00`/`dB0_dp2`/`dB00_dp2`) with something much simpler: **just two
-formulas per function** -- the fully general one, and one safe closed form
-for small `p²` -- because the small-`p²` form turns out to already be safe
-across *all* the mass-degenerate sub-cases at once, with no further
-per-mass branching needed. Verified via sympy (see below); this is a real
-result, not a hope.
-
-**The exact identity** (derived and algebraically verified today, `m1,m2`
-convention matching the code, not the guide's `m0,m1`):
-```
-B0(p²,m1,m2) = B0(0,m1,m2) - ∫₀¹ dx · ln( 1 - p²·x(1-x) / χ₀(x) )
-```
-where `χ₀(x) = χ(x,0) = m1²(1-x) + m2²·x` (a convex combination of the two
-masses² along the Feynman parameter path). Derivation: `χ(x,p²) - χ(x,0) =
-p²·x(x-1)` exactly (sympy-verified), so `χ(x,p²) = χ₀(x)·[1 -
-p²x(1-x)/χ₀(x)]`, and the log of that ratio pulls straight out of the
-integral defining `B0_finite`.
-
-**Why this is safe at the mass degeneracies too, not just at generic
-masses** (this was the open question raised in this session -- answered,
-not just hoped): the ratio `x(1-x)/χ₀(x)` that could in principle cause
-trouble is *algebraically* finite at both boundaries:
-- `m1 -> m2`: `χ₀(x) -> m1²` (constant) -- no issue, simplest case.
-- `m1 -> 0`: `x(1-x)/χ₀(x) -> (1-x)/m2²` -- the `x` cancels exactly against
-  `χ₀(x) -> m2²·x`, finite at `x=0` too.
-- `m2 -> 0`: symmetric, `(1-x)` cancels, finite at `x=1` too.
-
-So a single small-`p²` numeric implementation of this integral covers the
-general-mass, equal-mass, and one-mass-zero cases simultaneously -- no
-separate `F_expanded`-style branch needed within the small-`p²` regime.
-
-**Safety margin on `p²` itself:** `log(1-Y)` only breaks when `Y =
-p²x(1-x)/χ₀(x) >= 1`. Since `x(1-x) <= 1/4` on `[0,1]` and `χ₀(x) >=
-min(m1²,m2²)`, the danger threshold is `p² ≳ 4·min(m1²,m2²)` -- i.e. `p²`
-comparable to the *smaller mass²*, not merely "nonzero". Genuine safety
-margin for realistic small-`p²` phase-scan use, not a coincidence that
-happens to work at machine-epsilon scale.
-
-### Primary numerical architecture: Feynman-parameter integration (decided 2026-08-01)
-
-**All B (and C) function numerical evaluation uses direct Feynman-parameter
-quadrature as the primary path.** The closed-form analytical expressions
-in `guide.tex §4` are kept as the **symbolic path** (`.reduce()`/`.doit()`)
-and as **validation benchmarks** — not as production numerics.
-
-#### Motivation (decided after reviewing the full formula set)
-
-1. **Safety with no kinematic branching:** the Feynman-parameter integral
-   is safe for all mass degeneracies (`m0=m1`, `m0=0`, `p²=0`) and for
-   general kinematics, with no special-case branching needed. The only
-   special treatment is `p² > (m0+m1)²` (above threshold), handled by
-   the `iε` prescription.
-2. **Consistency with C functions:** the analytic special-case approach
-   would need to be repeated for C functions, which is essentially
-   impossible (the kinematic degeneracy tree for 3-point functions is
-   far more complex). Numerical integration unifies B and C under the
-   same approach with no additional work.
-3. **Error reduction:** the sign bug already found in the old `scalar.py`
-   came from transcribing a complex closed-form. The integral form is
-   three lines per function and trivially verified.
-
-#### Architecture
-
-The UV-divergent pole `Δ = 1/ε̄ − ln(m1²/μ²)` is **always kept symbolic**
-— it cannot be integrated away and cancels in renormalized physical
-quantities. Every function splits as:
-```
-Bi(p², m0, m1) = (UV pole in Δ) + finite_integral(p², m0, m1)
-```
-The finite part is computed numerically. UV-finite functions (all
-`dBi/dp²`) are computed entirely via quadrature.
-
-Core building block — shared across all functions:
-```python
-χ(x, p2, m0, m1) = m0²*(1-x) + m1²*x - x*(1-x)*p2
-```
-
-Feynman-parameter integrals (finite parts):
-```
-B0_finite  = -∫₀¹ ln(χ/μ²) dx
-B1_finite  =  ∫₀¹ x·ln(χ/μ²) dx      (sign: check guide.tex §3.2)
-B11_finite =  ∫₀¹ x²·ln(χ/μ²) dx
-B00_finite = -½·∫₀¹ χ·ln(χ/μ²) dx    (from guide.tex §3.2)
-
-dB0/dp²   = -∫₀¹ x(x-1)/χ dx         (UV-finite)
-dB1/dp²   =  ∫₀¹ x²(x-1)/χ dx
-dB11/dp²  =  ∫₀¹ x³(x-1)/χ dx
-dB00/dp²  = -Δ/12 - ½·∫₀¹ x(x-1)·ln(χ/m1²) dx
-```
-
-Implementation plan:
-- Pre-compute Gauss-Legendre nodes/weights (e.g. `np.polynomial.legendre.leggauss(50)`)
-- Vectorize χ evaluation over all nodes simultaneously (`numpy`)
-- **Below threshold** (`p² < (m0+m1)²`): χ > 0 on [0,1], pure real
-- **Above threshold** (`p² > (m0+m1)²`): use `p2 = p2 + 1e-10j` (iε
-  prescription); χ becomes complex, log/inverse handled in complex
-  arithmetic; imaginary part of result = physical absorptive part
-- All kinematic degeneracies (p²=0, m0=m1, m0=0) work automatically —
-  χ(x) remains smooth everywhere, no branching needed
-
-#### Two-tier role going forward
-
-The two-tier architecture (general closed form + small-p² fallback) is
-**no longer the production numeric path.** It survives as:
-- The symbolic `.reduce()` return value (analytical closed form in
-  `g.tex §4` variables — useful for computer algebra, `.doit()`, etc.)
-- Cross-check benchmarks for validating the numerical integrals
-
-#### Validation status (updated 2026-08-02)
-
-| Function | Validated | Method | Accuracy |
-|---|---|---|---|
-| B0 | ✓ done | scipy.quad + analytical ref | ≲10⁻¹² below thr, ~3×10⁻⁸ above |
-| B1 | ✓ done | reduction formula + swap identity | ≲10⁻¹⁵ all regimes |
-| B11 | ✗ not started | — | — |
-| B00 | ✗ not started | — | — |
-| dB0/dp² | ✓ done | analytical formula + fin.diff. | ≲10⁻¹⁴ below thr, ≲10⁻¹⁴ above |
-
-The cross-check pattern that found the B0 sign bug: compare GL quadrature
-against `scipy.integrate.quad` on the raw Feynman-parameter integral
-(first-principles, independent of the closed-form machinery). Use this for
-all future function validations before trusting the result.
-
-### Complete formula reference from `guide.tex §4` (verified 2026-07-21)
-
-**`guide.tex` is the authoritative source; read it for full derivations. This section
-records the implementation-critical formula map and any correctness notes.**
-
-Conventions: `f = p²+m0²-m1²`, `Δ = 1/ε̄ − ln(m1²/μ²)`, `Λ² = λ(p²,m0²,m1²)`.
-
-#### Non-zero momentum (p²≠0), general case
-
-B0: already documented in the confirmed-bug subsection above (two equivalent forms,
-equal-mass β form, one-zero-mass form).
-
-B1 inversion formula and mass-swap identity:
-```
-B1(p²,m0,m1) = [A0(m1) − A0(m0) + f·B0(p²,m0,m1)] / (2p²)
-B1(p²,m1,m0) = B0(p²,m0,m1) − B1(p²,m0,m1)
-```
-
-B00 and B11 from solving the 2×2 contraction system (using `d=4` to close):
-```
-B00 = (1/3)·[p²/6 + (m0²+m1²)/2 + A0(m1)/2 + m0²·B0 − f·B1]
-B11 = 1/(3p²)·[−p²/6 − (m0²+m1²)/2 − A0(m1) + m0²·B0 − 2f·B1]
-B11(p²,m1,m0) = B11(p²,m0,m1) − 2·B1(p²,m0,m1) + B0(p²,m0,m1)
-```
-
-Derivative formulas at non-zero p² (cascade: everything from `dB0/dp²`):
-```
-dB0/dp²   = (1/p²)·[1 − ((m0²−m1²)²−2p²(m0²+m1²)) / (p²·Λ)]   ← has 1/Λ
-dB1/dp²   = (1/p²)·[(m0²−m1²)·B0/2 + f·(dB0/dp²)/2]
-dB11/dp²  = (1/p²)·[−5B11/3 − 1/18 + m0²·(dB0/dp²) − 2f·(dB1/dp²)]
-dB00/dp²  = (1/3)·[1/6 + m0²·(dB0/dp²) − B1 − f·(dB1/dp²)]
-```
-
-**⚠ Threshold issue for `dB0/dp²`:** the `1/Λ` factor diverges at both Källén zeros:
-- `p²=(m0+m1)²` (physical threshold): genuine singularity — needs a stable formula.
-- `p²=(m0−m1)²` (pseudo-threshold): numerator also→0 for real kinematics, resolves.
-
-`B0` itself and `B1`, `B11`, `B00` are all well-behaved at both thresholds (`R→0`
-cleanly at the physical threshold). Only `dB0/dp²` needs a threshold-stable formula;
-`dB1/dp²`, `dB11/dp²`, `dB00/dp²` inherit the singularity from `dB0/dp²` algebraically
-but introduce no additional independent ones.
-
-Feynman-parameter integral forms (UV-finite pieces; use as independent cross-check,
-same technique as the `B0` sign-bug verification above):
-```
-dB0/dp²   = −∫₀¹ x(x−1)/χ dx
-dB1/dp²   =  ∫₀¹ x²(x−1)/χ dx
-dB11/dp²  =  ∫₀¹ x³(x−1)/χ dx
-dB00/dp²  = −Δ/12 − (1/2)∫₀¹ x(x−1)·ln(χ/m1²) dx
-
-d²B0/d(p²)²   =  ∫₀¹ x²(x−1)²/χ² dx
-d²B1/d(p²)²   = −∫₀¹ x³(x−1)²/χ² dx
-d²B11/d(p²)²  = −∫₀¹ x⁴(x−1)²/χ² dx
-d²B00/d(p²)²  = −(1/2)∫₀¹ x²(x−1)²/χ dx
-```
-(Note: `guide.tex` labels all four second-order forms as "d²B11/d(p²)²" — likely a
-LaTeX copy-paste slip; the integrands follow the expected x^n pattern for B0,B1,B11,B00.)
-
-#### Zero momentum (p²=0): three sub-cases
-
-All values at p²=0 are stable (no 1/p² poles). The derivative `dBi/dp²` at p²=0 can
-still carry UV-divergent `Δ` pieces because the p²-dependent `ln`-terms in `Bi` contribute
-a `Δ`-like constant when differentiated and then set p²=0.
-
-**Sub-case m0=m1=m:**
-```
-B0=Δ,  B1=Δ/2,  B11=Δ/3,  B00=(m²/2)(1+Δ)
-
-dB0=1/(6m²),       dB1=Δ/2−1/(12m²),    dB11=Δ/3−1/(20m²),   dB00=−Δ/12
-d²B0=1/(30m⁴),    d²B1=1/(60m⁴),        d²B11=1/(105m⁴),      d²B00=−1/(60m⁴)
-```
-
-**Sub-case m0=0, m1=m (one zero mass):**
-```
-B0=Δ+1,  B1=Δ/2+1/4,  B11=Δ/3+1/9,  B00=(m²/2)(3/2+Δ)  ← guide.tex lines 380-384
-
-dB0=1/(2m²),       dB1=Δ/2−1/(6m²),     dB11=Δ/3−1/(12m²),   dB00=−Δ/12−5/72
-d²B0=1/(3m⁴),     d²B1=1/(12m⁴),        d²B11=1/(30m⁴),       d²B00=−1/(24m⁴)
-```
-
-**Sub-case general m0≠m1:** longer polynomial/log expressions — read `guide.tex §4.2`
-and `§4.3` directly. Do not retype here to avoid transcription errors. The general forms
-for B0(0), all first derivatives dBi/dp²(0), and all second derivatives d²Bi/d(p²)²(0)
-are given there (three separate formula blocks).
-
-#### Taylor expansion switching conditions (`guide.tex §5`)
-
-Switch from the general p²≠0 formula to Taylor expansion when any of:
-```
-(1) p² < a·max(m0,m1)²                      [small p²]
-(2) |p²−(m0+m1)²| < a·max(m0,m1)²          [near physical threshold]
-    |p²−(m0−m1)²| < a·max(m0,m1)²          [near pseudo-threshold]
-(3) |m0−m1| < a·max(m0,m1)                  [nearly equal masses]
-(4) min(m0,m1) < a·max(m0,m1)               [one mass ≪ other]
-```
-where `a` is a user-adjustable `scale_tolerance` parameter.
-
-**Dimensional note:** `guide.tex §5` writes `a·max(m0,m1)` (units: mass) on the rhs of
-conditions (1) and (2) instead of `a·max(m0,m1)²` (units: mass²). This is dimensionally
-inconsistent with the lhs (which is mass²); corrected above. Fix in `guide.tex` before
-publication.
-
-**Note:** with the Feynman-parameter integration architecture (see above),
-conditions (1)–(4) are no longer needed for the *numerical* path — the
-integral handles all these cases automatically. These conditions remain
-relevant only if/when someone wants a fast analytical approximation for
-a specific kinematic region, or for the symbolic `.reduce()` path.
-
-## `A_functions.py` and `B_functions.py` — implementation status (2026-08-02)
-
-### Naming convention (decided 2026-08-02, enforced)
-
-All new PV function files use the **guide.tex convention**: arguments are
-`(p2, m0, m1)` where `m0` is the mass on propagator D0 and `m1` on D1.
-This makes every formula directly copy-pasteable from guide.tex without
-mental translation. `scalar.py` / `tensors.py` use the old `m1/m2` naming;
-this is one more reason to retire them.
-
-### `A_functions.py` — complete
-
-| Function | Status | Notes |
-|---|---|---|
-| `A0(m)` | ✓ complete | symbolic + numeric kernel; massless limit `A0(0)=0` |
-| `A00(m)` | ✓ complete | symbolic only (algebraic reduction to A0); `_derivative` returns 0 |
-| `A0000(m)` | ✓ complete | symbolic only; not in old `scalar.py` / `tensors.py` |
-
-All three have `_derivative(self, _)` returning `sp.S.Zero`: only p²
-derivatives are relevant for PV functions; mass derivatives are not implemented.
-
-### `B_functions.py` — B0 complete, rest to do
-
-#### B0 — fully implemented and validated (2026-08-02)
-
-**Numerical kernel** (`_numeric_kernel`): Feynman-parameter GL quadrature,
-N=100 nodes. Two paths:
-
-- **Below threshold** (`p² < (m0+m1)²`): vectorised single GL pass over [0,1]
-  with `x = sin²(πt/2)` substitution. Jacobian vanishes at both endpoints,
-  regularising log singularities when m0→0 or m1→0. Accuracy: machine
-  precision (~1e-15).
-
-- **Above threshold** (`p² > (m0+m1)²`): χ(x) has two zeros x1 < x2 in
-  (0,1). Integration is split into [0,x1] + [x1,x2] + [x2,1], each piece
-  using the same sin²(πt/2) substitution mapped to the subinterval (so the
-  log singularities at x1,x2 are regularised). The imaginary (absorptive)
-  part is computed analytically as `π(x2−x1)`. Accuracy: ~3×10⁻⁸.
-
-The helper `_b0_scalar(p2, m0, m1, mu_val, is_above)` handles a single
-kinematic point; `_gl_interval(p2, m0, m1, mu_val, a, b)` runs GL on [a,b].
-
-**Symbolic kernel** (`_eval` / `_eval_*`): closed-form expressions from
-guide.tex §4, dispatching via `sp.Piecewise` over six kinematic cases:
-`(p²=0,m0=0)`, `(p²=0,m1=0)`, `(p²=0,m0=m1)`, `(p²=0,general)`,
-`(m0=m1,general)`, `(general)`.
-
-**Validation result** (cross-checked against scipy.integrate.quad):
-- Below threshold, all mass configs: agreement to ≲10⁻¹²
-- Above threshold, real part: ~3×10⁻⁸ (limited by N=100 GL)
-- Above threshold, imaginary part: exact (analytical formula)
-- Zero-mass limit: correct via substitution regularisation
-- Equal-mass limit: correct
-- Small p²: correct to ~10⁻¹²
-
-#### Known bugs in `_eval_general` — found and fixed here, still broken in `scalar.py`
-
-The bug documented in the "Confirmed bug" section below is present in
-`scalar.py._eval_general` and `scalar.py.f_general`. In `B_functions.py`
-it is **fixed**: the correct formula uses the symmetric form from guide.tex
-eq. 318:
-
-```
-B0 = 1/ε̄ - ln(m0·m1/μ²) + 2 + (m1²-m0²)/(2p²)·ln(m0²/m1²) - R
-```
-
-**Note on guide.tex eq. 311 typo:** eq. 311 writes `(m1²-m0²+p²)/(2p²)` but
-the correct coefficient is `(m1²-m0²-p²)/(2p²)` (off by `p²/p² = 1`). Eq.
-318 (the symmetric form) is correct and was used as the implementation
-reference. This typo in guide.tex should be fixed before publication.
-
-#### `dB0_dp2` — fully implemented and validated (2026-08-02)
-
-UV-finite (no 1/ε̄ pole). `part="pole"` always returns 0.
-
-**Numerical kernel:**
-
-- **Below threshold**: vectorised GL of `∫₀¹ x(1−x)/χ dx` via `x=sin²(πt/2)`.
-  Integrand is smooth everywhere (no endpoint singularities even for m=0).
-  Accuracy: ~10⁻¹⁴.
-
-- **Above threshold**: χ(x) has simple poles (not log singularities) at x1, x2.
-  The iε approach fails (peak height ~1/ε, width ~ε, unresolvable with N=100).
-  Instead: **Cauchy-PV pole subtraction** for the real part + exact imaginary part.
-
-  *Real part*: subtract residues from integrand before GL, then add back analytic
-  Cauchy-PV terms:
-  ```
-  Re = GL[x(1-x)/χ - r₁/(x-x₁) - r₂/(x-x₂)] + r₁·ln((1-x₁)/x₁) + r₂·ln((1-x₂)/x₂)
-  where rᵢ = xᵢ(1-xᵢ) / χ'(xᵢ),  χ'(x₁)=-√K, χ'(x₂)=+√K
-  ```
-  The subtracted integrand is smooth on [0,1]. Accuracy: ~10⁻¹⁴.
-
-  *Imaginary part* (exact):
-  ```
-  Im = π·[(m₀²+m₁²)·p² − (m₀²−m₁²)²] / (p²²·√K)
-  ```
-  where K = Kallen(p²,m₀²,m₁²). Derived as d/dp²[π(x₂−x₁)]. Accuracy: exact.
-
-**Symbolic kernel** (`_eval` / `_eval_*`): dispatches via `sp.Piecewise` over
-six cases (same structure as B0). The p²=0 formulas are UV-finite constants;
-the p²≠0 formulas are derived by differentiating the guide.tex eq. 318 B0 form:
-```
-∂B0/∂p² = −(m₁²−m₀²)/(2p²²)·ln(m₀²/m₁²)
-         + [(m₀²+m₁²)p² − (m₀²−m₁²)²]/(p²²·Λ) · ln((m₀²+m₁²−p²+Λ)/(2m₀m₁))
-         − 1/p²
-```
-For equal masses: simplifies to `(2m²/(p²Λ))·ln((2m²−p²+Λ)/(2m²)) − 1/p²`.
-
-**Note on guide.tex dB0/dp² formula:** guide.tex eq. ~425 lists
-`(1/p²)[1 − ((m₀²−m₁²)²−2p²(m₀²+m₁²))/(p²·Λ)]` — this is algebraically
-**wrong** (neither matches the GL below threshold nor the finite-difference
-above threshold). The correct formula is the one derived above by explicit
-differentiation of B0 eq. 318. This error should be fixed in guide.tex before
-publication.
-
-#### B1 — fully implemented and validated (2026-08-02)
-
-**NOT symmetric under m0↔m1.**  Swap identity (guide.tex eq. 339):
-```
-B1(p²,m1,m0) = B0(p²,m0,m1) − B1(p²,m0,m1)
-```
-
-**Numerical kernel:** `_bfn_scalar(p2, m0, m1, mu_val, is_above, n=1)` —
-same split-GL scheme as B0 but integrand weight `x`:
-- Below threshold: single GL pass of `-∫₀¹ x·ln(χ/μ²) dx`.
-- Above threshold: split at x1,x2; Im = +π(x2²−x1²)/2 added analytically.
-
-The helper `_bfn_scalar(n)` is now general: `n=0`→B0, `n=1`→B1, `n=2`→B11.
-`_b0_scalar` now delegates to `_bfn_scalar(n=0)`.
-`_gl_interval(p2, m0, m1, mu_val, a, b, n=0)` accepts `n` for weight `x^n`.
-
-**Symbolic kernel (`_eval`):** dispatches over five kinematic cases:
-1. `(p²=0, m0=0)`: B1 = Δ(m1)/2 + 1/4
-2. `(p²=0, m1=0)`: B1 = Δ(m0)/2 + 3/4  ← via swap identity
-3. `(p²=0, m0=m1)`: B1 = Δ(m)/2
-4. `(p²=0, general)`: see below
-5. `(general, p²≠0)`: reduction formula (guide.tex eq. 333)
-
-**Pole:** 1/2 for all cases.
-
-**p²=0 general formula** (guide.tex eq. 397-398, with Δ = 1/ε̄ − ln(m1²/μ²)):
-```
-B1(0,m0,m1) = ½/ε̄ − ½ ln(m1²/μ²) + ¼ + m0²/[2(m0²−m1²)] − m0⁴ ln(m0²/m1²)/[2(m0²−m1²)²]
-```
-This is identical to guide.tex eq. 397-398: the guide writes `−(3m0²−m1²)/(4(m1²−m0²))`
-which equals `1/4 + m0²/[2(m0²−m1²)]` (same expression, different form).
-Reference mass in Δ is m1, matching guide line 269.
-
-**p²≠0 symbolic** (reduction formula, guide.tex eq. 333):
-```
-B1(p²,m0,m1) = [A0(m1) − A0(m0) + (p²+m0²−m1²)·B0(p²,m0,m1)] / (2p²)
-```
-
-**⚠ guide.tex eq. 397-398 is wrong:** B1(0,m0,m1) formula in the paper
-is missing terms (1/2)ln(m0²/m1²) + (3m0²−m1²)/(2(m0²−m1²)).  Verified
-numerically (off by ~0.5 for m0=1, m1=2) and via the swap identity.  Fix
-in guide.tex before publication.
-
-**⚠ guide.tex line 386 is wrong:** states "B1 and B11 are symmetric under
-exchange of internal masses" — they are NOT symmetric (swap identity gives
-B1(p²,m1,m0) = B0 − B1, which equals B1(p²,m0,m1) only when B0=2B1).
-
-**Validation:**
-- Swap identity `B0(p²,m0,m1) − B1(p²,m0,m1) − B1(p²,m1,m0) = 0`: to ~10⁻¹⁷
-- Reduction formula cross-check (GL vs analytical): ≲10⁻¹⁵
-- Im = f·Im(B0)/(2p²) above threshold: to ~10⁻¹⁷
-
-#### B11, B00 — not yet started
-
-Next implementation targets. Their Feynman-parameter integrals are:
-```
-B11_finite = -∫₀¹ x²·ln(χ/μ²) dx    (use _bfn_scalar with n=2)
-B00_finite = -(1/2)·∫₀¹ χ·ln(χ/μ²) dx   (pole part needs separate handling)
-```
-For B11: use `_bfn_scalar(n=2)`, same as B0/B1. Im above threshold = +π(x2³-x1³)/3.
-For B00: different structure (weight χ, not x^n), requires its own helper.
-Both are NOT symmetric under m0↔m1.
-
-## Roadmap: 3-point functions (planned, not started -- decided 2026-07-09)
-
-**Priority order, explicit:** finish the 2-point sector cleanly first
-(implement the Feynman-parameter numerical path for `B0`/`B1`/`B11`/`B00`,
-validate against closed forms) *before* starting on 3-point functions.
-Don't jump ahead to any of the below until the user says the 2-point work
-is done.
-
-**Architecture consistency note (2026-08-01):** the switch to Feynman-parameter
-numerical integration for B functions was motivated partly *by* C functions —
-having one uniform approach for both is cleaner than a closed-form B path and
-a numerical C path. The C tensor coefficient strategy below (Feynman-parameter
-direct integration, avoiding Gram determinants) is now the *same philosophy* as
-the B function implementation, not a special fallback.
-
-### `C0` (scalar triangle)
-
-User already has the formula (derived by hand, "under my eye"), not yet
-implemented. **Revised strategy (2026-08-01):** use direct Feynman-parameter
-numerical integration (2D integral over the simplex) as the primary numerical
-path, consistent with the B-function approach. The dilogarithm closed form
-is still worth implementing as the symbolic `.doit()` path and as a
-validation cross-check, but it is no longer the primary numerical route.
-Original strategy note preserved: one general closed-form expression built
-from dilogarithms, valid across the entire complex kinematic plane via
-`+iε` prescription baked into the dilog arguments, **not** case-split by
-kinematic region.
-This mirrors what Package-X / LoopTools / OneLOop do for `C0`. References
-if ever needed (not verified against the user's exact convention, just
-pointers): 't Hooft & Veltman (1979, "Scalar One Loop Integrals"), Denner
-(2005 review, "Techniques for the calculation of electroweak radiative
-corrections"), Ellis & Zanderighi (arXiv:0712.1851, "OneLOop"). Key
-implementation caveat: getting the complex branch / `+iε` handling right
-in the dilog arguments is what makes one formula valid everywhere --
-don't fall back to real-only piecewise formulas the way it doesn't need
-to for this function.
-
-### Tensor coefficients (`C1, C2, C11, C12, C22, C001, C002, C111, C112, C122, C222, ...`)
-
-**Two-tier strategy, decided 2026-07-09, do not deviate without asking:**
-
-1. **Fast/readable path, away from the Gram-determinant singularity:**
-   standard algebraic Passarino-Veltman reduction to `A0`/`B0`/`B1`/`C0`
-   (rational coefficients in the kinematic invariants, involving
-   `1/det(Gram)`, where Gram is the 2x2 matrix of dot products of the two
-   independent external momenta `q1, q2`). This is the same *kind* of
-   "solve a linear system" reduction that was rejected for the 2-point
-   tensor functions (see the superseded note above) -- but for 3-point it
-   is unavoidable: unlike `B1`/`B11`/`B00`, there is no known
-   Gram-determinant-free closed form for the triangle tensor
-   coefficients. Accept the `1/det(Gram)` here; it's inherent to the
-   physics, not a design mistake.
-2. **Robust numeric fallback, near/at small Gram determinant:** do
-   **not** attempt the full Denner-Dittmaier small-Gram-determinant
-   analytic *expansion* (Nucl. Phys. B658 (2003) 175; also the COLLIER
-   paper, Denner-Dittmaier-Hofer 2016) -- that's a research-grade
-   undertaking and was explicitly ruled out as out of scope for now.
-   Instead: evaluate the tensor integral **directly via the same
-   Feynman-parameter construction already used for `C0`, carrying the
-   numerator through instead of dropping it**, rather than going through
-   the algebraic reduction at all for that kinematic point. This has *no*
-   Gram determinant anywhere in its construction, which is exactly why it
-   stays robust exactly where the algebraic path blows up:
-   - Feynman-parametrize the propagators into `(k+shift(x))² − Δ(x)`,
-     where `shift(x) = -(x2*q1 + x3*q2)` is *linear* in the Feynman
-     parameters `x_i` and the external momenta `q_i` -- same `Δ(x)` as
-     already used for `C0`.
-   - Shift `k → k' = k + shift(x)`; expand the numerator
-     `(k'-shift(x))^{μ1}...(k'-shift(x))^{μR}` binomially in `k'`. Odd
-     powers of `k'` vanish under symmetric `d^dk'` integration; even
-     powers give a pure Gamma-function factor depending only on `d`, the
-     power of `k'`, and the propagator power -- **no Gram determinant**.
-   - What survives is `∫dx1 dx2 dx3 δ(1-x1-x2-x3) [monomial in x2, x3] /
-     Δ(x)^power` -- the same `Δ(x)` and integration domain/simplex as
-     `C0`, just with an extra polynomial weight (`x2`, `x3`, `x2²`,
-     `x2*x3`, etc., depending on which tensor structure) in the
-     numerator. A well-defined, always-finite 2D numeric integral,
-     structurally identical to the existing `C0` numeric integration --
-     just weighted.
-   - General-technique reference: Davydychev's papers on N-point tensor
-     integral reduction via Feynman-parameter integrals -- an alternative
-     to Gram-determinant-based PV algebra specifically because it avoids
-     the Gram determinant entirely.
-   - The exact monomial-in-`x2,x3` weight for each specific `C_ijk` needs
-     to be worked out by hand (mechanical binomial expansion, but
-     error-prone) -- the user is doing this themselves, same as the
-     2-point closed forms. Don't guess/derive a specific one unprompted.
-   - Bonus implication, noted but not yet acted on: since this
-     construction has *no* Gram-determinant issue at all, it isn't
-     strictly limited to being a "near-singular fallback" -- it's a
-     generally-robust numeric method for any tensor coefficient. Keep the
-     algebraic reduction as the fast/readable/symbolic path used away
-     from the singular region; this Feynman-parameter numeric path is the
-     always-correct backstop, decided to be invoked only near/at small
-     `det(Gram)` for now (not universally) to keep the fast symbolic path
-     as the default.
-
-### Why `.doit()` on tensor `C`-functions is not meant to be human-readable
-
-Fully expanding a tensor coefficient (e.g. `C11`) via the algebraic
-reduction above substitutes real `C0`/`B0` closed forms (each already
-several dilogarithms) into a linear combination weighted by
-`1/det(Gram)` -- the result is a wall of `Li2` terms, not something
-anyone reads by eye. This is expected, not a bug: keep `.reduce()`
-(stopping at `C0`/`B0`/`A0` as opaque symbols, per the existing
-`PVFunction.reduce()` vs `._eval()` split) as the human-facing,
-algebra-friendly form; reserve full `.doit()`/numeric evaluation for when
-actual numeric kinematics are being plugged in, not for display.
+  - **`simplify.py` — implemented 2026-08-12.** Canonical workflow:
+
+    ```
+    PV_simplify(expr)           # optional; eliminates d·B00+p²·B11 combination
+    set_kinematics(expr, subs)  # substitute p²=M², m0=0, Dot(p1,p2)=..., d=4, ...
+      ├── PV_reduce(expr)       # symbolic: B1/B11/B00/dBn → A0/B0/dB0; then Project()
+      └── compile(expr, ...)    # numeric: GL quadrature, never after PV_reduce
+    ```
+
+    **`PV_simplify`**: two sequential steps, both safe (no `1/p²` introduced):
+    - Step 1 — `ε̄·B00(p²,m0,m1)` → `(m0²+m1²)/4 − p²/12`  (UV pole residue of B00)
+    - Step 2 — `4·B00(p²,m0,m1) + p²·B11(p²,m0,m1)` → `A0(m1) + m0²·B0 − p²/6 + (m0²+m1²)/2`
+    Together they implement `d·B00 + p²·B11 → A0(m1) + m0²·B0(p²,m0,m1)` (metric
+    contraction identity from guide.tex §4). Step 2 only fires when **both** B00 and B11
+    with the same args appear and their coefficient ratio matches `4:p²` exactly — so it is
+    safe in any context. Works on scalar expressions; does NOT recognise the pattern when
+    tensor structures (`g^{μν}`, `p^μp^ν`) multiply the PV functions — apply
+    `Project` first to extract scalar coefficients if needed.
+
+    **`PV_reduce`**: replaces B1/B11/B00/dB1/dB11/dB00 with their algebraic reductions
+    to A0/B0/dB0. Iterates (max 5 passes) because B11 reduction contains B1. At p²=0
+    (after `set_kinematics`) dispatches to `._eval_p2_zero()` automatically.
+    **Never follow with `compile`** — the result contains `1/p²` and `1/ε̄` that
+    compile cannot evaluate.
+
+    **`Project(expr, mu, nu, p, mode='T')`**: extracts scalar coefficients from a rank-2
+    tensor result `T^{μν} = A·g^{μν} + B·p^μp^ν`. Modes:
+    - `'g'`  → A (coefficient of g^{μν})
+    - `'pp'` → B (coefficient of p^μp^ν)
+    - `'T'`  → A (transverse scalar; 'g' and 'T' are numerically identical: A is both
+      the g^{μν} coefficient and the coefficient of P_T^{μν} = g^{μν} − p^μp^ν/p²)
+    - `'L'`  → A + p²·B (longitudinal scalar; Ward identity: L=0 for gauge-conserved amplitudes)
+    p² is computed internally as `p**2` — **do not** pass `pvpy.symbols.p2` (that is a
+    separate named Symbol, not the algebraic square of p).
+
+    **Typical workflow for a self-energy:**
+    ```python
+    result  = ReduceGeneralNumerator(loop, numerator)
+    reduced = PV_reduce(result)          # or: PV_reduce(PV_simplify(result))
+    Pi_T    = Project(reduced, mu, nu, p, 'T')    # transverse scalar Π_T(p²)
+    Pi_L    = Project(reduced, mu, nu, p, 'L')    # = 0 by Ward identity in gauge theories
+    ```
+
+## PV scalar functions
+
+Implementation details, numerical architecture, formula reference, and per-function
+status are in `functions/CLAUDE.md` (read automatically when working in that directory).
+
+Summary: A0/A00/A0000, B0/B1/B11/B00 and all first derivatives dB0/dB1/dB11/dB00 are
+**complete and validated** in `functions/B_functions.py`. C functions are next.
 
 ## Quick smoke test
 

@@ -32,6 +32,8 @@ class A0(PVFunction):
         if len(args) != cls.nargs:
             raise TypeError(
                 f"{cls.__name__} expects {cls.nargs} arguments, got {len(args)}")
+        if sp.sympify(args[0]).is_zero:
+            return sp.S.Zero
         return super().__new__(cls, *args)
 
     def _derivative(self, _):
@@ -45,7 +47,7 @@ class A0(PVFunction):
         if part == "full":
             return sp.sympify(m**2 * (1 + 1/epsilon_bar - sp.log(m**2 / mu**2)))
         elif part == "pole":
-            return sp.sympify(m**2)
+            return sp.sympify(m**2) / epsilon_bar
         elif part == "finite":
             return sp.sympify(m**2) * (1 - sp.log(m**2 / mu**2))
 
