@@ -66,6 +66,12 @@ print(f(0.511e-3, 91.2))   # m_electron, m_Z in GeV
 
 Version 0.1.0 — alpha release. A, B functions (scalar and tensor) and their $p^2$ derivatives are fully implemented and validated. C functions (3-point) are in progress.
 
+## Development
+
+This package was developed with the assistance of [Claude](https://claude.ai) (Anthropic).
+
+The `CLAUDE.md` files in this repository document the design decisions, conventions, and known pitfalls of the codebase in a machine-readable way. If you are working on this package with an AI coding agent, point it to `CLAUDE.md` (repository root) and `pvpy/functions/CLAUDE.md` — they contain the full reasoning trail and will save a lot of re-derivation.
+
 ## Reference
 
 C. Verollet, *pvpy: a Python package for symbolic and numeric 1-loop computations* (in preparation).

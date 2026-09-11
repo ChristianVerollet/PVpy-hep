@@ -1,24 +1,20 @@
-# tensorial_decomposition.py -- project context for Claude Code
+# pvpy — development context for AI coding agents
 
-This file is a handoff summary of a long design conversation with chat-Claude.
-It exists so a fresh Claude Code session has the reasoning trail, not just the
-code. Read this before making changes -- several non-obvious bugs were
-already found and fixed once; don't reintroduce them.
+Read this before making changes. It documents conventions, design decisions,
+and bugs that were already found and fixed — don't reintroduce them.
 
 ## What this is
 
 A Python/sympy library for 1-loop Feynman integral reduction, in the spirit
 of Package-X / COLLIER, but built incrementally and kept readable. Two
-layers, per the project's own split:
+layers:
 
-1. **Tensorial decomposition** (this file): write a loop integral's
-   numerator/denominator and get back a sympy expression in terms of
-   Passarino-Veltman (PV) functions, metric tensors, and external momenta.
-2. **PV function implementations** (separate, user-owned files: `A0`, `B0`,
-   `B00` exist; user is implementing `B1`, `B11`, `C0`, `C00`, etc.
-   themselves in their own module and will import them into `PV_REGISTRY`).
-   This file does NOT implement PV functions -- it only orchestrates which
-   one to call with which arguments.
+1. **Tensorial decomposition**: write a loop integral's numerator/denominator
+   and get back a sympy expression in terms of Passarino-Veltman (PV)
+   functions, metric tensors, and external momenta.
+2. **PV function implementations**: A0/A00/A0000 (1-point) and
+   B0/B1/B11/B00 with all first derivatives (2-point) are complete and
+   validated. C functions (3-point) are the next target.
 
 ## Core convention -- fix this in your head before touching anything
 
@@ -101,10 +97,10 @@ instead pulls in `B00`/`B11` placeholders even when the final contracted
 answer is expressible purely via `A0`/`B0`. Prefer Method A whenever
 possible.
 
-## Package structure (as of current session)
+## Package structure
 
 ```
-pvpy/
+pvpy/                      ← git repo root (also the installed package)
   __init__.py              — re-exports everything listed below
   algebra.py               — g, Mom, Dot, Eps, contract, simplify_external_dots
   tensorial_decomposition.py — LoopIntegral, Propagator, TensorialDecomposition,
@@ -115,27 +111,19 @@ pvpy/
   dirac.py                 — DiracMatrix, slash, Gamma, Gamma5, DiracTrace
   symbols.py               — pre-defined sympy Symbols (momenta, masses, indices)
   base.py                  — PVFunction base class
-  simplify.py              — set_kinematics, PV_simplify, PV_reduce, Project, reduce_pv (legacy)
+  simplify.py              — set_kinematics, PV_simplify, PV_reduce, Project
+  numeric.py               — compile()
   functions/
     __init__.py            — imports A0, A00, A0000 from A_functions.py;
-                             B0, dB0_dp2, B1, B11, B00 from B_functions.py (canonical)
-    A_functions.py         — A0, A00, A0000  ← canonical, use this
-    B_functions.py         — B0, dB0_dp2, B1, B11, B00 ← canonical, all validated
-    scalar.py              — LEGACY: A0, B0, B00 — DO NOT IMPORT (pollutes subclass registry)
-    tensors.py             — LEGACY: A00, B1 — superseded
+                             B0, dB0_dp2, B1, B11, B00 and derivatives from B_functions.py
+    A_functions.py         — A0, A00, A0000  (complete)
+    B_functions.py         — B0, B1, B11, B00, dB0/dB1/dB11/dB00  (complete, validated)
 ```
 
 `algebra.py` was split out of `tensorial_decomposition.py` to give a clean
 import layer: `from pvpy.algebra import g, Mom, Dot, Eps, contract`. Old
 imports like `from pvpy.tensorial_decomposition import g, Mom` still work
 via the re-export.
-
-### `scalar.py` / `tensors.py` retirement plan
-
-`scalar.py` and `tensors.py` will be deleted once `A_functions.py` and
-`B_functions.py` are fully validated and `functions/__init__.py` is updated
-to import from them instead. Do not add features to `scalar.py`/`tensors.py`;
-all new work goes into `A_functions.py` and `B_functions.py`.
 
 ## Convention — metric, ε, γ₅ sign (settled, don't change)
 
@@ -508,37 +496,16 @@ Mechanism, in case it needs extending (e.g. for a new token kind):
   signatures take mass-squared directly, `derivative_wrt_mass_squared`
   should be simplified to a direct `sp.diff` (no chain rule needed at
   all) -- ask before assuming either way.
-- **SUPERSEDED, do not do this (2026-07-09):** an earlier version of this
-  note suggested deriving `B1`/`B11`/`B00`/etc. by contracting the
-  open-tensor ansatz and *solving the resulting linear system* for them in
-  terms of `A0`/`B0`. **The user tried this direction and rejected it**:
-  the current `B1.reduce()` in `functions/tensors.py` is exactly this kind
-  of solved-system formula --
-  `B1 = (A0(m0) - A0(m1) - (p2+m0**2-m1**2)*B0(p2,m0,m1)) / (2*p2)` -- and
-  it is **ill-defined at `p²=0`** (division by `p²`; the docstring already
-  flags `B1(0,...)` as needing a separate unimplemented limiting formula).
-  This is the same class of problem as bug #4 (chain-rule/`1/m` artifacts
-  from differentiating before substituting) -- solving a linear system
-  algebraically introduces spurious poles at kinematic points where the
-  *true* function is perfectly finite, because the solving step divides by
-  a combination (here, essentially the system's determinant / a `p²`
-  factor) that isn't actually present in the closed form.
-  **Current plan instead:** the user has computed genuine closed-form
-  formulas for `B0`, `B1`, `B11`, `B00` by hand (case-by-case over the
-  different kinematic regions, same style as the existing `A0`/`B0`/`B00`
-  in `scalar.py`) that are well-defined at `p²=0` and will implement them
-  directly as primitives -- no linear-system solving. **Do not** re-solve
-  for any tensor PV function from a linear system as a shortcut; only use
-  a closed-form the user has actually derived.
-  - Open question raised, not decided: whether to reorganize
-    `functions/scalar.py` / `functions/tensors.py` by point-count instead
-    (e.g. a "1-point" module for `A0`/`A00`, a "2-point" one for
-    `B0`/`B1`/`B00`/`B11`, ...) rather than by scalar-vs-tensor. Don't
-    assume this happened -- check the actual file layout.
-  - `C0`, `C00`, `C001`, etc. (3-point) are still undefined placeholder
-    `sympy.Function`s (via `get_pv_function`'s fallback) unless added to
-    `PV_REGISTRY`; not addressed by the above, still open.
-  - **`simplify.py` — implemented 2026-08-12.** Canonical workflow:
+- **Do not derive tensor PV functions (B1, B11, B00) by solving the
+  linear system** that comes from contracting the open-tensor ansatz. That
+  approach produces spurious `1/p²` poles (the solving step divides by
+  the determinant) that are not present in the true closed forms. All
+  B/C functions must be implemented from hand-derived closed-form
+  expressions.
+- `C0`, `C00`, `C001`, etc. are still undefined placeholders (via
+  `get_pv_function`'s fallback) unless added to `PV_REGISTRY` — C
+  functions are the current development target.
+- **`simplify.py` — canonical workflow:**
 
     ```
     PV_simplify(expr)           # optional; eliminates d·B00+p²·B11 combination
