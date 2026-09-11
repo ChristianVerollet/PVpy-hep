@@ -2,22 +2,23 @@
 
 A Python package for symbolic and numeric 1-loop computations in Quantum Field Theory.
 
+[Download the tutorial notebook:](https://github.com/ChristianVerollet/PVpy-hep/raw/main/pvpy_tutorial.ipynb)
+
 `pvpy` provides two essential layers:
 
-- **Symbolic layer:** Enables to write loop integrals, perform tensorial Passarino-Veltman (PV) reduction, set kinematics of the functions and reduce them into simpler expressions, and then to expand them to closed-form analytic expressions via `sympy` depending on the kinematic. Closed forms of first derivative of two-points functions w.r.t $p^2$ are also implemented.
+- **Symbolic layer:** Enables to write loop integrals, perform tensorial Passarino-Veltman (PV) reduction, set kinematics of the functions, reduce them into simpler expressions, and then to expand them to closed-form analytic expressions depending on the kinematic, all in a `sympy` inhereting form. Closed forms of first derivative of two-points functions w.r.t $p^2$ are also implemented.
 - **Numeric layer:** Enables to turn any PV expression into a vectorised `numpy` callable with correct handling of all kinematic limits (equal masses, massless propagators, above-threshold imaginary parts).
 
-> **Limits**
-
-> Symbolic form of three-points functions (C-functions) in different kinematic cases not yet
+> **Limits:** Symbolic form of three-points functions (C-functions) in different kinematic cases not yet
 > implementd. Four-points functions (D-functions) for box diagrams not implement at all yet.
+
 ## Installation
 
 ```bash
-pip install pvpy
+pip install PVpy-hep
 ```
 
-## Quick start
+## Minimalist example
 
 ```python
 from pvpy import Propagator, LoopIntegral, ReduceGeneralNumerator
