@@ -1,8 +1,9 @@
-# PVpy-hep — Passarino-Veltman Python for HEP
+# PVpy-hep  A Passarino-Veltman Python package for HEP
 
 A Python package for symbolic and numeric 1-loop computations in Quantum Field Theory.
 
-[Download the tutorial notebook:](https://github.com/ChristianVerollet/PVpy-hep/raw/main/pvpy_tutorial.ipynb)
+[Download the tutorial notebook](https://raw.githubusercontent.com/ChristianVerollet/PVpy-hep/main/pvpy_tutorial.ipynb)
+
 
 `pvpy` provides two essential layers:
 
