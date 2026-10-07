@@ -48,33 +48,46 @@ class PVFunction(sp.Expr):
     def _eval(self, part = "full", **hints):
         raise NotImplementedError
 
-    def doit(self, part = "full", **hints):
+    def doit(self, **hints):
         """
         Expand this PV function to its closed-form symbolic expression.
 
-        part : {"full", "pole", "finite"}
-            "full"   → complete expression including 1/ε̄ pole.
-            "pole"   → the UV-divergent part only (residue / ε̄).
-                       For individual functions:  A0 → m²/ε̄, B0 → 1/ε̄, etc.
-                       "pole" + "finite" == "full" for individual PV functions.
-            "finite" → the UV-finite remainder (no 1/ε̄ terms).
+        Always pass part= explicitly:
+
+            expr.doit(part="full")    → complete expression including 1/ε̄ pole.
+            expr.doit(part="pole")    → the UV-divergent part only (residue / ε̄).
+            expr.doit(part="finite")  → the UV-finite remainder (no 1/ε̄ terms).
+
+        Calling doit() without part= (or via sp.simplify which calls doit()
+        internally) returns self unchanged, so PV functions are never expanded
+        accidentally.  "pole" + "finite" == "full" for individual PV functions.
 
         Note: when called on a general sympy *expression* (not a single
         PVFunction), sympy propagates doit(**hints) to every atom including
         plain numbers and symbols, which pass through unchanged.  This means
         rational-constant terms (finite contributions not from any PV function)
-        appear in both doit("pole") and doit("finite").  The 1/ε̄ coefficient
-        of doit("pole") is always correct; to extract a clean pole use
+        appear in both doit(part="pole") and doit(part="finite").  The 1/ε̄
+        coefficient of doit(part="pole") is always correct; to extract a clean
+        pole use
             sp.expand(expr.doit(part="full")).coeff(1/epsilon_bar)
         or equivalently
             expr.doit(part="pole").coeff(1/epsilon_bar)
         To display the full result with the UV pole collected, use PV_collect().
         """
-        if part not in ["full", "pole", "finite"]:
+        part = hints.get('part', None)
+        if part is None:
+            # Called without an explicit part= (e.g. by sp.simplify internally).
+            # Return self so PV functions are never auto-expanded.
+            return self
+        if part not in ("full", "pole", "finite"):
             raise ValueError("part must be 'full', 'pole' or 'finite'")
-
-        return self._eval(part = part)
+        return self._eval(part=part)
     
+    def _eval_simplify(self, **kwargs):
+        # Tell sp.simplify to leave PV functions as opaque symbolic objects.
+        # Without this, sp.simplify calls doit() and expands to logarithms.
+        return self
+
     # ----- Derivatives ----- #
 
     def _eval_derivative(self, sym):

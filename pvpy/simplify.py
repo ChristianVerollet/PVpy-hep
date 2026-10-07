@@ -17,6 +17,48 @@ import sympy as sp
 from .base import PVFunction
 
 
+def PV_symplify(expr: sp.Expr) -> sp.Expr:
+    """
+    Simplify an expression containing PV functions without expanding them.
+
+    Equivalent to sp.simplify(expr, doit=False): simplifies rational
+    coefficients and algebraic structure while keeping PV function objects
+    (B0, B1, B00, ...) in their symbolic form.  Use this instead of
+    sp.simplify() when you want simplification without triggering .doit().
+    """
+    return sp.simplify(expr, doit=False)
+
+
+def diff_p2(expr: sp.Expr, p) -> sp.Expr:
+    """
+    Differentiate expr with respect to p**2.
+
+    Sympy cannot differentiate directly with respect to a Pow expression
+    (sp.diff(expr, p**2) raises ValueError).  This function introduces a
+    Dummy variable s = p**2, differentiates with respect to s, then
+    substitutes p**2 back.
+
+    Parameters
+    ----------
+    expr : sympy expression (typically a PV-function expression).
+    p    : the momentum symbol whose square to differentiate by,
+           e.g. pvpy.p or pvpy.p_1.
+
+    Returns
+    -------
+    d(expr)/d(p**2) as a sympy expression.
+
+    Example
+    -------
+    >>> diff_p2(B0(p**2, m_0, m_1), p)
+    dB0_dp2(p**2, m_0, m_1)
+    >>> diff_p2(Pi_T, p)   # Pi_T is a transverse self-energy
+    <analytic derivative>
+    """
+    s = sp.Dummy('s', positive=True)
+    return sp.expand(sp.diff(expr.subs(p**2, s), s).subs(s, p**2))
+
+
 def set_kinematics(expr: sp.Expr, substitutions: dict) -> sp.Expr:
     """
     Substitute kinematic conditions into a PV-function expression.
@@ -112,6 +154,9 @@ def PV_simplify(expr: sp.Expr) -> sp.Expr:
             for atom in list(expr.atoms(uv_cls)):
                 expr = expr.subs(d * atom, 4 * atom)
         expr = sp.expand(expr)
+        # Any remaining d must be in non-PV terms (all d·PV patterns were consumed above)
+        if d in expr.free_symbols:
+            expr = sp.expand(expr.subs(d, 4))
 
     # Step 1: ε̄·B00 → (m0²+m1²)/4 − p²/12
     for b00_atom in list(expr.atoms(B00)):

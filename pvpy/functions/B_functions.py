@@ -30,6 +30,20 @@ _GL_X = 0.5 * (_gl_t + 1.0)      # nodes mapped from [-1,1] to [0,1]
 _GL_W = 0.5 * _gl_w               # weights (×1/2 from change of variable)
 
 
+def set_quadrature_order(n):
+    """Set the number of Gauss-Legendre nodes used by all B-function kernels.
+
+    The default is 100. Higher values improve accuracy for unequal-mass integrals
+    at the cost of proportionally more compute time. Typical choices: 100 (default),
+    200 (extra precision), 50 (fast scan).
+    """
+    global _GL_N, _GL_X, _GL_W
+    _GL_N = n
+    _gl_t, _gl_w = np.polynomial.legendre.leggauss(n)
+    _GL_X = 0.5 * (_gl_t + 1.0)
+    _GL_W = 0.5 * _gl_w
+
+
 def _gl_interval(p2, m0, m1, mu_val, a, b, n=0):
     """
     GL quadrature of -∫_a^b x^n·ln(|χ(x)|/μ²) dx via x=a+(b−a)sin²(πt/2).
@@ -281,6 +295,11 @@ class B0(PVFunction):
         if len(args) != cls.nargs:
             raise TypeError(
                 f"{cls.__name__} expects {cls.nargs} arguments, got {len(args)}")
+        p2, m0, m1 = args
+        # B0 is symmetric under m0 ↔ m1 — canonicalize so that
+        # B0(p2,a,b) and B0(p2,b,a) are the same sympy object.
+        if sp.sympify(m0).sort_key() > sp.sympify(m1).sort_key():
+            args = (p2, m1, m0)
         return super().__new__(cls, *args)
 
     def reduce(self):
@@ -435,9 +454,11 @@ class B0(PVFunction):
         p2v = np.atleast_1d(p2v.copy())
         m0v = np.atleast_1d(m0v.copy())
         m1v = np.atleast_1d(m1v.copy())
+        orig_shape = p2v.shape
+        p2v, m0v, m1v = p2v.ravel(), m0v.ravel(), m1v.ravel()
 
         if part == "pole":
-            return np.ones_like(p2v)
+            return np.ones_like(p2v).reshape(orig_shape)
 
         n = len(p2v)
         result = np.empty(n, dtype=complex)
@@ -450,12 +471,12 @@ class B0(PVFunction):
             jac = (np.pi / 2) * np.sin(np.pi * t)
             chi = m0v**2 * (1 - x) + m1v**2 * x - x * (1 - x) * p2v
             result = np.sum(_GL_W[:, np.newaxis] * (-np.log(chi / mu_val**2) * jac), axis=0)
-            return result.real + 0j  # imaginary part identically zero below threshold
+            return (result.real + 0j).reshape(orig_shape)
 
         for i in range(n):
             result[i] = _b0_scalar(p2v[i], m0v[i], m1v[i], mu_val, above[i])
 
-        return result
+        return result.reshape(orig_shape)
 
 # ---------------------------------------------------------------------------
 # B1 — first tensor coefficient (not symmetric under m0 ↔ m1)
@@ -589,9 +610,11 @@ class B1(PVFunction):
         p2v = np.atleast_1d(p2v.copy())
         m0v = np.atleast_1d(m0v.copy())
         m1v = np.atleast_1d(m1v.copy())
+        orig_shape = p2v.shape
+        p2v, m0v, m1v = p2v.ravel(), m0v.ravel(), m1v.ravel()
 
         if part == "pole":
-            return np.full_like(p2v, 0.5)
+            return np.full_like(p2v, 0.5).reshape(orig_shape)
 
         n = len(p2v)
         result = np.empty(n, dtype=complex)
@@ -604,12 +627,12 @@ class B1(PVFunction):
             chi = m0v**2 * (1 - x) + m1v**2 * x - x * (1 - x) * p2v
             result = np.sum(_GL_W[:, np.newaxis] * (-x * np.log(chi / mu_val**2) * jac),
                             axis=0)
-            return result.real + 0j
+            return (result.real + 0j).reshape(orig_shape)
 
         for i in range(n):
             result[i] = _bfn_scalar(p2v[i], m0v[i], m1v[i], mu_val, above[i], n=1)
 
-        return result
+        return result.reshape(orig_shape)
 
 
 # ---------------------------------------------------------------------------
@@ -754,9 +777,11 @@ class B11(PVFunction):
         p2v = np.atleast_1d(p2v.copy())
         m0v = np.atleast_1d(m0v.copy())
         m1v = np.atleast_1d(m1v.copy())
+        orig_shape = p2v.shape
+        p2v, m0v, m1v = p2v.ravel(), m0v.ravel(), m1v.ravel()
 
         if part == "pole":
-            return np.full_like(p2v, 1.0 / 3.0)
+            return np.full_like(p2v, 1.0 / 3.0).reshape(orig_shape)
 
         npts = len(p2v)
         result = np.empty(npts, dtype=complex)
@@ -770,12 +795,12 @@ class B11(PVFunction):
             result = np.sum(
                 _GL_W[:, np.newaxis] * (-x**2 * np.log(chi / mu_val**2) * jac),
                 axis=0)
-            return result.real + 0j
+            return (result.real + 0j).reshape(orig_shape)
 
         for i in range(npts):
             result[i] = _bfn_scalar(p2v[i], m0v[i], m1v[i], mu_val, above[i], n=2)
 
-        return result
+        return result.reshape(orig_shape)
 
 
 # ---------------------------------------------------------------------------
@@ -806,6 +831,10 @@ class B00(PVFunction):
         if len(args) != cls.nargs:
             raise TypeError(
                 f"{cls.__name__} expects {cls.nargs} arguments, got {len(args)}")
+        p2, m0, m1 = args
+        # B00 is symmetric under m0 ↔ m1 — canonicalize mass order.
+        if sp.sympify(m0).sort_key() > sp.sympify(m1).sort_key():
+            args = (p2, m1, m0)
         return super().__new__(cls, *args)
 
     def reduce(self):
@@ -860,13 +889,14 @@ class B00(PVFunction):
 
     def _eval_p2_zero(self, part="full"):
         # B00(0, m0, m1) general, m0≠m1, both nonzero.
-        # Symmetric form (guide.tex line 482):
-        # (1/4)(m0²+m1²)(3/2 + 1/ε̄ − ln(m0m1/μ²)) − (m0⁴+m1⁴)/(8(m0²−m1²))·ln(m0²/m1²)
+        # guide.tex line 1127:
+        # (1/4)(m0²+m1²)(3/2 + Δ_{m1}) − m0⁴/(4(m0²−m1²))·ln(m0²/m1²)
+        # where Δ_{m1} = 1/ε̄ − ln(m1²/μ²).
         _, m0, m1 = map(sp.simplify, self.args)
         pole = (m0**2 + m1**2) / 4
         finite = (sp.Rational(3, 8) * (m0**2 + m1**2)
-                  - sp.Rational(1, 4) * (m0**2 + m1**2) * sp.log(m0 * m1 / mu**2)
-                  - (m0**4 + m1**4) / (8 * (m0**2 - m1**2)) * sp.log(m0**2 / m1**2))
+                  - sp.Rational(1, 4) * (m0**2 + m1**2) * sp.log(m1**2 / mu**2)
+                  - m0**4 / (4 * (m0**2 - m1**2)) * sp.log(m0**2 / m1**2))
         if part == "pole":
             return pole / epsilon_bar
         if part == "finite":
@@ -919,9 +949,11 @@ class B00(PVFunction):
         p2v = np.atleast_1d(p2v.copy())
         m0v = np.atleast_1d(m0v.copy())
         m1v = np.atleast_1d(m1v.copy())
+        orig_shape = p2v.shape
+        p2v, m0v, m1v = p2v.ravel(), m0v.ravel(), m1v.ravel()
 
         if part == "pole":
-            return (m0v**2 + m1v**2) / 4 - p2v / 12
+            return ((m0v**2 + m1v**2) / 4 - p2v / 12).reshape(orig_shape)
 
         npts = len(p2v)
         result = np.empty(npts, dtype=complex)
@@ -935,12 +967,12 @@ class B00(PVFunction):
             result = np.sum(
                 _GL_W[:, np.newaxis] * (0.5 * chi * (1 - np.log(chi / mu_val**2)) * jac),
                 axis=0)
-            return result.real + 0j
+            return (result.real + 0j).reshape(orig_shape)
 
         for i in range(npts):
             result[i] = _b00_scalar(p2v[i], m0v[i], m1v[i], mu_val, above[i])
 
-        return result
+        return result.reshape(orig_shape)
 
 #############################################################################
 ############################### Derivatives #################################
@@ -970,6 +1002,10 @@ class dB0_dp2(PVFunction):
         if len(args) != cls.nargs:
             raise TypeError(
                 f"{cls.__name__} expects {cls.nargs} arguments, got {len(args)}")
+        p2, m0, m1 = args
+        # dB0/dp² is symmetric under m0 ↔ m1 — canonicalize mass order.
+        if sp.sympify(m0).sort_key() > sp.sympify(m1).sort_key():
+            args = (p2, m1, m0)
         return super().__new__(cls, *args)
 
     def _latex(self, printer):
@@ -1069,9 +1105,11 @@ class dB0_dp2(PVFunction):
         p2v = np.atleast_1d(p2v.copy())
         m0v = np.atleast_1d(m0v.copy())
         m1v = np.atleast_1d(m1v.copy())
+        orig_shape = p2v.shape
+        p2v, m0v, m1v = p2v.ravel(), m0v.ravel(), m1v.ravel()
 
         if part == "pole":
-            return np.zeros_like(p2v)
+            return np.zeros_like(p2v).reshape(orig_shape)
 
         n = len(p2v)
         result = np.empty(n, dtype=complex)
@@ -1083,12 +1121,12 @@ class dB0_dp2(PVFunction):
             jac = (np.pi / 2) * np.sin(np.pi * t)
             chi = m0v**2 * (1 - x) + m1v**2 * x - x * (1 - x) * p2v
             result = np.sum(_GL_W[:, np.newaxis] * (x * (1 - x) / chi) * jac, axis=0)
-            return result.real + 0j
+            return (result.real + 0j).reshape(orig_shape)
 
         for i in range(n):
             result[i] = _db0_scalar(p2v[i], m0v[i], m1v[i], above[i])
 
-        return result
+        return result.reshape(orig_shape)
 
 
 
@@ -1205,9 +1243,11 @@ class dB1_dp2(PVFunction):
         p2v = np.atleast_1d(p2v.copy())
         m0v = np.atleast_1d(m0v.copy())
         m1v = np.atleast_1d(m1v.copy())
+        orig_shape = p2v.shape
+        p2v, m0v, m1v = p2v.ravel(), m0v.ravel(), m1v.ravel()
 
         if part == "pole":
-            return np.zeros_like(p2v)
+            return np.zeros_like(p2v).reshape(orig_shape)
 
         n_pts = len(p2v)
         result = np.empty(n_pts, dtype=complex)
@@ -1219,12 +1259,12 @@ class dB1_dp2(PVFunction):
             jac = (np.pi / 2) * np.sin(np.pi * t)
             chi = m0v**2 * (1 - x) + m1v**2 * x - x * (1 - x) * p2v
             result = np.sum(_GL_W[:, np.newaxis] * (x**2 * (1 - x) / chi) * jac, axis=0)
-            return result.real + 0j
+            return (result.real + 0j).reshape(orig_shape)
 
         for i in range(n_pts):
             result[i] = _dbn_scalar(p2v[i], m0v[i], m1v[i], 1, above[i])
 
-        return result
+        return result.reshape(orig_shape)
 
 
 # ---------------------------------------------------------------------------
@@ -1346,9 +1386,11 @@ class dB11_dp2(PVFunction):
         p2v = np.atleast_1d(p2v.copy())
         m0v = np.atleast_1d(m0v.copy())
         m1v = np.atleast_1d(m1v.copy())
+        orig_shape = p2v.shape
+        p2v, m0v, m1v = p2v.ravel(), m0v.ravel(), m1v.ravel()
 
         if part == "pole":
-            return np.zeros_like(p2v)
+            return np.zeros_like(p2v).reshape(orig_shape)
 
         n_pts = len(p2v)
         result = np.empty(n_pts, dtype=complex)
@@ -1360,12 +1402,12 @@ class dB11_dp2(PVFunction):
             jac = (np.pi / 2) * np.sin(np.pi * t)
             chi = m0v**2 * (1 - x) + m1v**2 * x - x * (1 - x) * p2v
             result = np.sum(_GL_W[:, np.newaxis] * (x**3 * (1 - x) / chi) * jac, axis=0)
-            return result.real + 0j
+            return (result.real + 0j).reshape(orig_shape)
 
         for i in range(n_pts):
             result[i] = _dbn_scalar(p2v[i], m0v[i], m1v[i], 2, above[i])
 
-        return result
+        return result.reshape(orig_shape)
 
 
 # ---------------------------------------------------------------------------
@@ -1393,6 +1435,10 @@ class dB00_dp2(PVFunction):
         if len(args) != cls.nargs:
             raise TypeError(
                 f"{cls.__name__} expects {cls.nargs} arguments, got {len(args)}")
+        p2, m0, m1 = args
+        # dB00/dp² is symmetric under m0 ↔ m1 — canonicalize mass order.
+        if sp.sympify(m0).sort_key() > sp.sympify(m1).sort_key():
+            args = (p2, m1, m0)
         return super().__new__(cls, *args)
 
     def reduce(self):
@@ -1509,9 +1555,11 @@ class dB00_dp2(PVFunction):
         p2v = np.atleast_1d(p2v.copy())
         m0v = np.atleast_1d(m0v.copy())
         m1v = np.atleast_1d(m1v.copy())
+        orig_shape = p2v.shape
+        p2v, m0v, m1v = p2v.ravel(), m0v.ravel(), m1v.ravel()
 
         if part == "pole":
-            return np.full_like(p2v, -1.0 / 12.0)
+            return np.full_like(p2v, -1.0 / 12.0).reshape(orig_shape)
 
         n_pts = len(p2v)
         result = np.empty(n_pts, dtype=complex)
@@ -1525,9 +1573,9 @@ class dB00_dp2(PVFunction):
             result = np.sum(
                 _GL_W[:, np.newaxis] * (0.5 * x * (1 - x) * np.log(chi / mu_val**2) * jac),
                 axis=0)
-            return result.real + 0j
+            return (result.real + 0j).reshape(orig_shape)
 
         for i in range(n_pts):
             result[i] = _db00_scalar(p2v[i], m0v[i], m1v[i], mu_val, above[i])
 
-        return result
+        return result.reshape(orig_shape)

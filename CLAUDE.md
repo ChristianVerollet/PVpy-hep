@@ -75,7 +75,7 @@ input handling.
 | | `TensorialDecomposition` (Method B) | `ReduceLoopIntegral` / `ReduceGeneralNumerator` (Method A) |
 |---|---|---|
 | numerator form | pure `k^{mu1}...k^{muR}`, set via `LoopIntegral.rank` | any expression: spectator tensors (`g`, `Mom(p,.)`, couplings) times k-dependence written with `Dot`/`Mom(k,.)` |
-| mechanism | Wick-contraction combinatorics (`tensor_structures`) enumerating all pair/momentum-label patterns | algebraic substitution `k^2 -> D_0+m_0^2`, `2k.q_i -> D_i-D_0-q_i^2+m_0^2-m_i^2`, expand as polynomial in `D_i`, match powers against propagator powers |
+| mechanism | Wick-contraction combinatorics (`tensor_structures`) enumerating all pair/momentum-label patterns | algebraic substitution `k^2 -> D_0+m_0^2`, `2k.q_i -> D_i-D_0-q_i^2+m_i^2-m_0^2`, expand as polynomial in `D_i`, match powers against propagator powers |
 | propagator powers | only power 1 | **any integer power**, via `d/dm^2` trick (needs derivatives of PV functions, which the user has) |
 | when it's the right tool | you want the open-index Lorentz tensor itself, to combine with other open structures later | numerator is/contains scalar k-dependence, OR (via `ReduceGeneralNumerator`) a per-term mix of open k-indices and scalar k^2/k.p pieces -- e.g. **gamma trace output, always** |
 
@@ -473,6 +473,35 @@ Mechanism, in case it needs extending (e.g. for a new token kind):
     (g, Mom, Eps)) and f.exp.is_integer and f.exp.is_positive` in the factor
     loop and expand into `int(f.exp)` copies of `f.base`.
 
+16. **`DiracMatrix.__mul__` does not accept Python `complex` (e.g. `1j`).** Only
+    sympy scalars are handled. `expr * 1j` where `expr` is a `DiracMatrix` raises
+    `TypeError: unsupported operand type(s) for *: 'DiracMatrix' and 'complex'`.
+    Fix: use `sp.I` (sympy imaginary unit) instead of `1j`. Note that two factors
+    combine automatically — `sp.I * ... * sp.I * ...` = `−1 * ...` — so
+    `-(sp.I * DiracTrace(A * sp.I * B))` simplifies to `DiracTrace(A * B)`.
+    Same applies to `sp.Float`/`sp.Integer` wrappers for Python `float`/`int` if
+    ever needed, but plain Python `int` and `float` are already handled correctly.
+
+14. **Sign error in `reduce_scalar_k_dependence` (`tensorial_decomposition.py`,
+    line 282).** The substitution for `2k·q_i` derived from `D_i = (k+q_i)²−m_i²`
+    is `2k·q_i = D_i − D_0 − q_i² + m_i² − m_0²`. The code had the mass terms
+    reversed: `+ masses[0]**2 - masses[i]**2` instead of `+ masses[i]**2 - masses[0]**2`.
+    Symptom: self-energy results were NOT symmetric under m₀↔m₁ exchange, with a
+    spurious `−4(m₀²−m₁²)·B₀` antisymmetric term. The Ward identity `L = A+p²C ≠ 0`
+    was also violated. Fix: single character change on that line, swapping the mass
+    indices. After the fix, `Pi_11_NE` from a single fermion loop diagram is
+    symmetric on its own — **do not** add `Pi_11_NE + Pi_11_EN` to enforce symmetry,
+    that was a wrong workaround based on the buggy result.
+
+15. **`doit()` in `base.py` must NOT expand PV functions when called without an
+    explicit `part=` kwarg.** Sympy's `sp.simplify` internally calls `expr.doit()`
+    (without any keyword arguments) before applying `_eval_simplify` hooks. If `doit()`
+    always expanded to the full formula, calling `sp.simplify(expr)` on an expression
+    containing PV functions would accidentally evaluate them. Fix: in `PVFunction.doit()`,
+    check for an explicit `part=` keyword argument — return `self` if absent (sympy's
+    internal call), expand only when `part=` is explicitly supplied by user code.
+    **Do not change `doit()` to always expand — the `part=` guard is intentional.**
+
 ## Known limitations / honest TODO list
 
 - `ReduceLoopIntegral`/`ReduceGeneralNumerator` do a **single** substitution
@@ -529,6 +558,10 @@ Mechanism, in case it needs extending (e.g. for a new token kind):
     (after `set_kinematics`) dispatches to `._eval_p2_zero()` automatically.
     **Never follow with `compile`** — the result contains `1/p²` and `1/ε̄` that
     compile cannot evaluate.
+
+    **`compile` accepts any numpy array shape**: compiled functions broadcast over
+    inputs of any matching shape (scalar, 1D, 2D, ND) and return the same shape.
+    This enables parameter-space scans with multi-dimensional arrays directly.
 
     **`Project(expr, mu, nu, p, mode='T')`**: extracts scalar coefficients from a rank-2
     tensor result `T^{μν} = A·g^{μν} + B·p^μp^ν`. Modes:

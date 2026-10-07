@@ -8,12 +8,13 @@ from .tensorial_decomposition import (
 
 from .dirac import DiracMatrix, slash, Gamma, Gamma5, DiracTrace
 
-from .simplify import set_kinematics, PV_simplify, PV_reduce, PV_collect, Project
+from .simplify import set_kinematics, PV_simplify, PV_symplify, PV_reduce, PV_collect, Project, diff_p2
 from .base import PVFunction
 
 from .functions import A0, B0, A00, B1, B11, B00, dB0_dp2, dB1_dp2, dB11_dp2, dB00_dp2
+from .functions.B_functions import set_quadrature_order
 
-from .symbols import m, m_0, m_1, m_2, m_3, m_4, k, p, p_1, p_2, p_3, p_4, k2, p2, p_12, p_22, p_32, p_42,mu, nu, rho, sigma 
+from .symbols import m, m_0, m_1, m_2, m_3, m_4, k, p, p_1, p_2, p_3, p_4, k2, p2, p_12, p_22, p_32, p_42, mu, nu, rho, sigma
 
 from .numeric import compile
 
@@ -27,7 +28,13 @@ __all__ = [
     # dirac
     "DiracMatrix", "slash", "Gamma", "Gamma5", "DiracTrace",
     # utilities
-    "set_kinematics", "PV_simplify", "PV_reduce", "PV_collect", "Project", "PVFunction",
+    "set_kinematics", "PV_simplify", "PV_symplify", "PV_reduce", "PV_collect", "Project", "diff_p2", "PVFunction",
+    "compile", "set_quadrature_order",
     # PV functions
-    "A0", "B0", "dB0_dp2", "A00", "B1", "dB1_dp2", "B11", "dB11_dp2", "B00", "dB00_dp2",
+    "A0", "A00", "B0", "dB0_dp2", "B1", "dB1_dp2", "B11", "dB11_dp2", "B00", "dB00_dp2",
+    # pre-defined symbols
+    "m", "m_0", "m_1", "m_2", "m_3", "m_4",
+    "k", "p", "p_1", "p_2", "p_3", "p_4",
+    "k2", "p2", "p_12", "p_22", "p_32", "p_42",
+    "mu", "nu", "rho", "sigma",
 ]

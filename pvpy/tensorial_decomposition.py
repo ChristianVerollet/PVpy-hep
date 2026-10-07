@@ -161,8 +161,10 @@ def kinematic_args(loop_integral: LoopIntegral) -> tuple:
     Current convention used here: (invariants..., masses...)
     with invariants = [(q_i - q_0)^2 for i in 1..N-1] in propagator order.
     """
+    from .symbols import _pow_to_sym
     qs = [p.shift for p in loop_integral.propagators]
-    invariants = [sp.expand((qs[i] - qs[0]) ** 2) for i in range(1, loop_integral.N)]
+    invariants = [sp.expand((qs[i] - qs[0]) ** 2).subs(_pow_to_sym)
+                  for i in range(1, loop_integral.N)]
     return tuple(invariants + loop_integral.masses)
 
 
@@ -256,6 +258,7 @@ def reduce_scalar_k_dependence(k_poly_expr: sp.Expr, loop_integral: LoopIntegral
     Reduce a SCALAR polynomial in Dot(k,k)/Dot(k, V) to a sum of (mass-derivatives of)
     scalar PV functions, using the propagator powers on loop_integral.
     """
+    from .symbols import _pow_to_sym
     N = loop_integral.N
     k = loop_integral.k
     qs = [p.shift for p in loop_integral.propagators]
@@ -276,7 +279,7 @@ def reduce_scalar_k_dependence(k_poly_expr: sp.Expr, loop_integral: LoopIntegral
         coeffs = decompose_in_basis(other, basis)
         expr_i = 0
         for i, c in coeffs.items():
-            expr_i += c * (D[i] - D[0] - sp.expand(qs[i] ** 2) + masses[0] ** 2 - masses[i] ** 2) / 2
+            expr_i += c * (D[i] - D[0] - sp.expand(qs[i] ** 2).subs(_pow_to_sym) + masses[i] ** 2 - masses[0] ** 2) / 2
         full_subs[dot] = expr_i
 
     poly_expr = sp.expand(k_poly_expr.subs(full_subs)) if full_subs else sp.expand(k_poly_expr)

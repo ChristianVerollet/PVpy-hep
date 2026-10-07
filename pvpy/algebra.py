@@ -61,13 +61,30 @@ class Mom(sp.Function):
 
 
 class Dot(sp.Function):
-    """Scalar dot product placeholder: Dot(a, b) represents a·b (symmetric)."""
+    """
+    Scalar dot product placeholder: Dot(a, b) represents a·b (symmetric).
+
+    For the predefined momentum symbols (k, p, p_1, p_2, p_3, p_4), Dot(p, p)
+    automatically evaluates to the corresponding squared-momentum Symbol (p2,
+    k2, p_12, ...) so that set_kinematics, sp.diff, and algebraic cancellations
+    work correctly.
+
+    Caution: for a custom momentum symbol q not in the predefined list, Dot(q, q)
+    remains a Dot object and will NOT cancel with a bare q**2 or a user-defined
+    Symbol.  Always use the predefined momenta when building loop integrals; if
+    you need more external legs add p_3, p_4 which are already defined.
+    """
     nargs = 2
 
     @classmethod
     def eval(cls, a, b):
         if sp.sympify(a).sort_key() > sp.sympify(b).sort_key():
             return cls(b, a)
+        if a == b:
+            from .symbols import _dot_squares
+            sq = _dot_squares.get(a)
+            if sq is not None:
+                return sq
 
     def _sympystr(self, printer):
         a, b = self.args
@@ -281,11 +298,19 @@ def simplify_external_dots(expr: sp.Expr, k: sp.Symbol) -> sp.Expr:
     """
     Rewrite Dot(a,b) for a,b != k via the polarisation identity
     a·b = ((a+b)² − a² − b²) / 2.  Leaves Dot(k,...) untouched.
+
+    For Dot(p,p) where p is a pre-defined momentum symbol, returns the
+    corresponding squared-momentum Symbol (p2, p_12, ...) from symbols.py
+    rather than the Pow p**2, so that set_kinematics and sp.diff work directly.
     """
+    from .symbols import _dot_squares
     subs = {}
     for d in expr.atoms(Dot):
         a, b = d.args
         if a == k or b == k:
             continue
-        subs[d] = a**2 if a == b else sp.expand((a + b) ** 2 - a ** 2 - b ** 2) / 2
+        if a == b:
+            subs[d] = _dot_squares.get(a, a**2)
+        else:
+            subs[d] = sp.expand((a + b) ** 2 - a ** 2 - b ** 2) / 2
     return expr.subs(subs) if subs else expr

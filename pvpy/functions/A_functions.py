@@ -53,10 +53,7 @@ class A0(PVFunction):
 
     def _eval(self, part="full", **hints):
         m = sp.simplify(self.args[0])
-        return sp.Piecewise(
-            (self._eval_massless(part), sp.Eq(m, 0)),
-            (self._eval_massive(part),  True),
-        )
+        return self._eval_massive(part)
 
     def numeric(self, kernel="numpy"):
         return self._numeric_kernel

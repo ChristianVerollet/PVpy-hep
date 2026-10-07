@@ -74,8 +74,11 @@ dB00/dp²    = −1/(12ε̄) + (1/2)·∫₀¹ x(1−x)·ln(χ/μ²) dx   (pole 
   Im B11  = +π(x2³−x1³)/3
   Im B00  = (π/2)·∫_{x1}^{x2} χ dx  < 0  [via antiderivative p2x³/3 − fx²/2 + m0²x]
   ```
-- **Broadcasting fix**: all `_numeric_kernel` functions use `np.broadcast_arrays`
-  before `atleast_1d` to handle scalar m0/m1 with vector p2.
+- **Arbitrary-shape broadcasting**: all `_numeric_kernel` functions support inputs of
+  any matching numpy shape (scalar, 1D, 2D, ND). After `broadcast_arrays` + `atleast_1d`,
+  `orig_shape = p2v.shape` is saved, inputs are flattened to 1D via `.ravel()`, the GL
+  computation runs on flat arrays, and every return reshapes the result back with
+  `.reshape(orig_shape)`. This enables parameter scans with multi-dimensional arrays.
 
 ### dBn/dp² above threshold: Cauchy-PV subtraction
 
@@ -255,10 +258,19 @@ p²≠0: `[(m0²+m1²)−2A0(m1)+2m0²B0+4D·B1−2m0²p²·dB0+4fp²·dB1] / (6
 #### B00 — complete
 
 Pole = `(m0²+m1²)/4 − p²/12` (kinematic-dependent). **SYMMETRIC under m0↔m1.**
-p²=0 general: `(m0²+m1²)/4·(1/ε̄+3/2−ln(m0m1/μ²)) − (m0⁴+m1⁴)/(8D)·ln(m0²/m1²) / (m0²-m1²)`
+Mass args are canonicalized (sorted by `sort_key()`) in `B00.__new__`, so `B00(0,m_N,m_E)`
+and `B00(0,m_E,m_N)` always return the same object.
+p²=0 general (guide.tex line 1127, current implementation):
+  `B00(0,m0,m1) = (m0²+m1²)/4·(3/2+Δ_{m1}) − m0⁴/(4(m0²-m1²))·ln(m0²/m1²)`
+  where Δ_{m1} = 1/ε̄ − ln(m1²/μ²).
+  Here m1 is the SECOND argument in the canonical order (after sort_key sorting).
+  The log reference is ln(m1²/μ²) — a single log atom — which helps sympy `collect`.
+  Algebraically equivalent to the symmetric form `ln(m0m1/μ²)` (verified to ~10⁻¹⁵).
 p²≠0 reduction (CORRECTED): `(1/6)·[−p²/3 + m0²+m1² + A0(m1) + 2m0²·B0 − f·B1]`
 Numerical: `_b00_scalar` (weight χ in GL).
 Note: guide.tex line 450 `B00(0,0,m) = (m²/2)(3/2+Δ)` is WRONG by factor 2; correct is `(m²/4)(3/2+Δ)`.
+Note: the OLD symmetric p²=0 form `(m0²+m1²)/4·(1/ε̄+3/2−ln(m0m1/μ²)) − (m0⁴+m1⁴)/(8(m0²-m1²))·ln(m0²/m1²)`
+  is numerically identical but was replaced because sympy's `collect` works better with a single log atom.
 
 #### dB00/dp² — complete
 
@@ -281,11 +293,28 @@ same split-interval strategy, same PV subtraction for derivative integrals.
 
 ### `C0` (scalar triangle)
 
-User has derived the formula. **Strategy:** direct Feynman-parameter 2D numerical
-integration over the simplex as the primary numerical path (consistent with B approach).
-The dilogarithm closed form implemented as symbolic `.doit()` and validation cross-check.
-One general formula valid across the entire complex kinematic plane via `+iε` prescription
-— no case-splitting by kinematic region.
+**Feynman-parameter integral:**
+C₀(p₁²,p₂²,Q²;m₀,m₁,m₂) = −∫₀¹dx∫₀^{1−x}dy 1/χ(x,y)
+where χ = −x(1-x-y)p₁² + y(1-x-y)p₂² + xyQ² + xm₁² + ym₂² + (1−x−y)m₀²
+
+**Strategy:** direct 2D Feynman-parameter numerical integration over the simplex as the
+primary numerical path (consistent with B approach). The dilogarithm closed form
+implemented as symbolic `.doit()` and validation cross-check. One general formula valid
+across the entire complex kinematic plane via `+iε` prescription — no case-splitting.
+
+**Special case p₁²=p₂²=0 (effective vertex, light external fermions, massive loop):**
+χ simplifies to χ(x,y) = m₀²+x(m₁²-m₀²)+y(m₂²-m₀²)+xyQ².
+The y-integral has a closed form:
+  ∫₀^{1-x} dy/χ = (1/A(x))·ln[D_num(x)/D_den(x)]
+  where A(x) = m₂²-m₀²+xQ², D_den(x) = m₀²+(m₁²-m₀²)x,
+        D_num(x) = m₂²+x(Q²+m₁²-m₂²)−x²Q² = (1-x)m₂²+xm₁²+x(1-x)Q²
+The remaining x-integral is of the form ∫₀¹ ln(quadratic)/(linear) dx.
+Factor D_num = −Q²(x−x₊)(x−x₋); then each ∫₀¹ ln(x−xᵢ)/A(x) dx yields Li₂ terms via:
+  ∫₀¹ ln(a+bx)/(c+dx) dx = (1/d){ln((ad-bc)/d)·ln((c+d)/c) + Li₂(-bc/(ad-bc)) - Li₂(-b(c+d)/(ad-bc))}
+The full result has ~4-6 dilogarithm terms for general masses — not "clean" but exact.
+For equal masses (m₁=m₂) or other special cases the formula simplifies considerably.
+Implement as `_eval_p1_p2_zero` method, analogous to B function `_eval_p2_zero`.
+The 2D Feynman numerical path handles this kinematics without any special-casing.
 
 ### Tensor coefficients (C1, C2, C11, C12, C22, C001, C002, C111, C112, C122, C222, ...)
 
