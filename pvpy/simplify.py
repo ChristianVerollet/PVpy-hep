@@ -342,7 +342,8 @@ def Project(expr: sp.Expr, mu, nu, p, mode: str = 'T') -> sp.Expr:
     if mode not in ('g', 'pp', 'T', 'L'):
         raise ValueError(f"Unknown mode {mode!r}; choose from 'g', 'pp', 'T', 'L'.")
 
-    p2 = sp.expand(p**2)
+    from .symbols import _dot_squares
+    p2 = _dot_squares.get(p, sp.expand(p**2))
 
     expr = sp.expand(expr)
     terms = expr.args if expr.func is sp.Add else [expr]
